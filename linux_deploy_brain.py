@@ -53,21 +53,18 @@ FOLLOW-ON (tracked in objectives/008 + 009)
 USAGE
     sudo python3 linux_deploy_brain.py deploy   --brain X --posture personal|server
                                                 [--port N] [--bind personal|server]
-                                                [--package <tar>] [--skip-gateway]
-                                                [--skip-residency]
+                                                [--skip-gateway] [--skip-residency]
     sudo python3 linux_deploy_brain.py teardown --brain X [--purge --yes]
     sudo python3 linux_deploy_brain.py verify   --brain X [--port N]
     sudo python3 linux_deploy_brain.py status   --brain X
 """
 
 import argparse
-import hashlib
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 from pathlib import Path
 
 for _s in (sys.stdout, sys.stderr):
@@ -80,8 +77,24 @@ for _s in (sys.stdout, sys.stderr):
 # Locations
 # ---------------------------------------------------------------------------
 
-FACTORY_ROOT = Path(__file__).resolve().parent          # brains/brain_workshop/factory
-DIST_DIR     = FACTORY_ROOT / "dist"
+FACTORY_ROOT = Path(__file__).resolve().parent          # the repo root — this file lives here
+# source/ IS a one-to-one image of a deployed brain root: staging is a copy of this tree, not an
+# assembly of parts (parity with windows_deploy_brain.py — no build step, no tarball). RESOLVED so
+# the staging filter can compare walked dirs against it by identity.
+SOURCE_ROOT  = (FACTORY_ROOT / "factory" / "source").resolve()
+
+# Brain-root context/policy files. They live in source/ AT THEIR FINAL NAMES — the ONE upstream, no
+# *.template suffix and no policy_templates/ hop. They are the only source members the copy does NOT
+# copy: staging skips them (see _make_stage_ignore) and seed_brain_context_files() places them
+# instead, because they need [BRAIN_NAME] substitution and must NEVER clobber a live brain's policy.
+# Keep this list identical to installer_1's CONTEXT_FILES (a name here the installer does not know is
+# a file the brain can rewrite).
+CONTEXT_FILES = ("brain_invariants.md", "CLAUDE.md", "agents.md", "brain_core.md")
+
+# The env var naming the install root (dir holding brains/<brain>/). Standalone convention — no
+# HORIZON_* required; $HORIZON_ROOT is honored only as the in-AIOS default (see resolve_install_root).
+INSTALL_ROOT_ENV = "AIOS_INSTALL_ROOT"
+
 BRAIN_NAME_RE = re.compile(r"^[a-z][a-z0-9_]{1,19}$")
 
 # Where the read-only config seam is mounted inside the brain's view (parity with
@@ -183,21 +196,33 @@ def seam_mount_unit():      return "opt-brain_truths.mount"       # system .moun
 
 
 def resolve_install_root(args):
+    """The directory that contains brains/<brain>/. EXPLICIT OR NOTHING.
+
+    Precedence: --install-root → $AIOS_INSTALL_ROOT → $HORIZON_ROOT (Horizon.AIOS install) → die.
+    Outside a Horizon.AIOS install an unset install root is a USAGE ERROR, not something to guess at.
+
+    This used to walk up six levels looking for a brains/ subdir and then fall back to a fixed offset
+    from this file — which silently bound a clone to whatever tree it happened to be unpacked inside,
+    deploying a live brain (an OS account + a multi-GB runtime) into an unrelated ancestor. Guessing a
+    destructive destination is never better than asking. Parity with windows_deploy_brain.py."""
     if getattr(args, "install_root", None):
         return Path(os.path.abspath(args.install_root))
-    env_root = os.environ.get("AIOS_INSTALL_ROOT")
-    if env_root and os.path.isdir(env_root):
+    env_root = os.environ.get(INSTALL_ROOT_ENV)
+    if env_root:
+        if not os.path.isdir(env_root):
+            die(f"${INSTALL_ROOT_ENV} is set to {env_root!r}, which is not a directory.\n"
+                "    Point it at the dir that holds (or will hold) brains/<brain>/, or pass\n"
+                "    --install-root <dir> explicitly.")
         return Path(os.path.abspath(env_root))
     # On a Horizon.AIOS install $HORIZON_ROOT IS the install root (the folder that holds brains/).
     horizon_root = os.environ.get("HORIZON_ROOT")
     if horizon_root and os.path.isdir(horizon_root):
         return Path(os.path.abspath(horizon_root))
-    d = FACTORY_ROOT
-    for _ in range(6):
-        if (d / "brains").is_dir():
-            return d
-        d = d.parent
-    return FACTORY_ROOT.parent.parent.parent
+    die(f"no install root: pass --install-root <dir> or set ${INSTALL_ROOT_ENV}.\n"
+        "    That is the dir that holds brains/<brain>/ — the brain is deployed to\n"
+        "    <install-root>/brains/<brain>/. It is not guessed and has no default: this deploy\n"
+        "    creates an OS account and writes a multi-GB runtime, so the destination is yours to\n"
+        f"    name.\n    e.g.  --install-root /opt/brains   or   export {INSTALL_ROOT_ENV}=/opt/brains")
 
 def brain_paths(args):
     root = resolve_install_root(args)
@@ -282,95 +307,166 @@ def create_brain(args):
 # Stage: stage the code package (portable — identical to the Windows path)
 # ---------------------------------------------------------------------------
 
-def _package_sort_key(p):
-    m = re.search(r"brain-factory-(\d+)\.(\d+)\.(\d+)-(\d{4}-\d{2}-\d{2})", p.name)
-    if not m:
-        return ((-1, -1, -1), "", p.name)
-    return ((int(m.group(1)), int(m.group(2)), int(m.group(3))), m.group(4), p.name)
+# WHAT THE COPY MAY TOUCH — path-scoped, not member-scoped. Staging is one
+# copytree(SOURCE_ROOT, brain_dir); the tables below are the only things that bound it. All paths
+# are BRAIN-RELATIVE and matched as exact posix paths, never bare names ("knowledge" and
+# "knowledge/brain_rw" are opposite rules — one is refreshed, one is the brain's data). Parity with
+# windows_deploy_brain.py; a name here that drifts from source/ is caught by _assert_zone_tables.
 
-def _newest_package():
-    cands = sorted(DIST_DIR.glob("brain-factory-*.tar.gz"), key=_package_sort_key)
-    return cands[-1] if cands else None
+# NEVER OVERWRITE — the brain's own data + the live engine. Skipped only when they ALREADY EXIST, so
+# a first deploy lays the empty scaffold and a redeploy never touches it. system/wsl_engine is a
+# Windows artifact (absent on Linux) — kept belt-and-braces so the tables read identically per-OS.
+_STAGE_PROTECT = ("system/wsl_engine", "knowledge/brain_rw", "skills/brain_rw")
 
-def _verify_sha256(tar_path):
-    sha_file = tar_path.with_suffix(tar_path.suffix + ".sha256")
-    if not sha_file.is_file():
-        warn(f"no .sha256 next to {tar_path.name} — skipping integrity check")
-        return
-    expected = sha_file.read_text(encoding="utf-8").split()[0].strip().lower()
-    h = hashlib.sha256()
-    with open(tar_path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-    actual = h.hexdigest().lower()
-    if actual != expected:
-        die(f"package integrity FAILED for {tar_path.name}\n"
-            f"    expected {expected}\n    actual   {actual}")
-    ok(f"package integrity verified ({tar_path.name})")
+# ALWAYS OVERWRITE — strictly factory-owned; a redeploy must ship fixes here rather than keep
+# first-deploy content. The copy overwrites by default, so these are simply never protected; listed
+# for the reader and asserted against the tree about to be copied (_assert_zone_tables).
+_STAGE_REFRESH = ("knowledge/brain_ro", "skills/brain_ro")
 
-# Runtime state staging must never clobber. wsl is a Windows artifact (absent
-# on Linux); knowledge/ (data door target) and the provision marker are protected.
-_STAGE_PROTECT = ("knowledge",)
+# EXCLUDES — never carry runtime dirs, build cruft, or secrets into a brain. A gitignore-clean
+# checkout still carries certs/ + *.pem/*.key on a host that ever ran the gateway locally, so this
+# filter is load-bearing. The *.example TEMPLATES (cert.pem.example, .env.example, *.map.example)
+# are NOT matched here, so they ship.
+_CODE_EXCL_DIRS   = {"wsl_engine", "wsl_engine_export", "chroma_store", "__pycache__",
+                     "certs", ".transient"}
+_CODE_EXCL_SUFFIX = (".pyc", ".pem", ".key")           # real key material (….example is kept)
+
+# Repo furniture: real at the SOURCE ROOT ONLY, never staged into a brain. Matched at depth 0 so a
+# brain-legitimate dir of the same name deeper in the tree is unaffected.
+_SOURCE_ONLY_ROOT = ("policy_templates",)
+
+
+def _is_example(name):
+    return name.endswith(".example")
+
+def _rel_posix(src_dir, name):
+    """Brain-relative path of <name> inside source dir <src_dir>, as posix. At the source root this
+    is just <name> (pathlib drops the '.' component)."""
+    return (Path(src_dir).relative_to(SOURCE_ROOT) / name).as_posix()
+
+def _is_protected(rel, brain_dir):
+    """True if <rel> is protected AND already exists in the brain — the only case in which the copy
+    must keep its hands off. First deploy: nothing exists, everything is staged."""
+    return rel in _STAGE_PROTECT and (Path(brain_dir) / rel).exists()
+
+def _assert_zone_tables():
+    """The ro/rw tables are a security boundary: a mistake silently clobbers the brain's data
+    (protect) or ships no fixes (refresh). Check them before the copy, while it is still cheap. A
+    REFRESH entry that names a path no longer in source/ (a rename that landed in the tree but not
+    the table) matches nothing and silently ships nothing — so those are checked against the tree
+    about to be copied. PROTECT entries name runtime state source/ correctly does not carry, so they
+    are not."""
+    both = set(_STAGE_PROTECT) & set(_STAGE_REFRESH)
+    if both:
+        die(f"staging tables disagree: {sorted(both)} listed as BOTH protected and refreshed.")
+    for rel in _STAGE_PROTECT + _STAGE_REFRESH:
+        if rel != rel.strip("/") or "\\" in rel:
+            die(f"staging table entry must be a clean brain-relative posix path: {rel!r}")
+    for rel in _STAGE_REFRESH:
+        if not (SOURCE_ROOT / rel).exists():
+            die(f"_STAGE_REFRESH names {rel!r}, which does not exist in {SOURCE_ROOT}.\n"
+                "    Either the zone was renamed and the table was not, or the checkout is\n"
+                "    incomplete. A refresh zone that matches nothing silently ships no fixes.")
+
+
+def _make_stage_ignore(brain_dir):
+    """The copytree(ignore=) filter — everything the copy must NOT carry, in one place: excluded
+    runtime/build/secret paths, the brain's own protected data, the source-only furniture, the
+    seeded context files, and the last line of defence against staging a populated token map."""
+    def _ignore(src, names):
+        here = Path(src).resolve()
+        if here != SOURCE_ROOT and SOURCE_ROOT not in here.parents:
+            die(f"copytree walked outside {SOURCE_ROOT}: {src} — refusing to stage.")
+        at_root = here == SOURCE_ROOT
+        drop = set()
+        for n in names:
+            rel = _rel_posix(src, n)
+            # The brain's own data: present ⇒ never touch. (Absent ⇒ fall through and stage the
+            # scaffold, which is what a first deploy needs.)
+            if _is_protected(rel, brain_dir):
+                info(f"protected, not overwriting: {rel}/")
+                drop.add(n)
+                continue
+            # Seeded, not copied: they need [BRAIN_NAME] substitution and only-if-absent idempotence,
+            # both of which a copy would defeat. See seed_brain_context_files().
+            if at_root and (n in CONTEXT_FILES or n in _SOURCE_ONLY_ROOT):
+                drop.add(n)
+                continue
+            if n in _CODE_EXCL_DIRS:
+                drop.add(n)
+            elif n == ".env":
+                drop.add(n)                        # live dotenv — only .env.example ships
+            elif n.endswith(".map") and not _is_example(n):
+                # Empty token-map templates SHIP (the seam seeds the gateway from them); a POPULATED
+                # map is a real secret leak — refuse loudly.
+                fp = Path(src) / n
+                try:
+                    populated = any(re.match(r"^[^#\s]", ln)
+                                    for ln in fp.read_text(encoding="utf-8",
+                                                           errors="ignore").splitlines())
+                except OSError:
+                    populated = False
+                if populated:
+                    die(f"refusing to stage a POPULATED token map (secret leak): {fp}")
+            elif n.endswith(_CODE_EXCL_SUFFIX) and not _is_example(n):
+                drop.add(n)
+        return drop
+    return _ignore
+
+
+def _stage_from_source(brain_dir):
+    """Copy source/ — a one-to-one image of a brain root — into brains/<brain>/. No build step, no
+    tarball, no member list: the delivered artifact IS the repo you are running from. Idempotent
+    (code is tier-1); the brain's own data is protected by path (_STAGE_PROTECT), not by luck.
+
+    Unlike the Windows path there is no ACL-repair here: copytree runs as root and lands root-owned,
+    world-readable code, and the Linux harden stage tightens ownership afterward (there is no drvfs
+    inheritance trap and no reparse-point-into-a-running-VM to sweep — bind mounts, not 9p)."""
+    _assert_zone_tables()
+    if not SOURCE_ROOT.is_dir():
+        die(f"source tree not found at {SOURCE_ROOT} — this is not a complete checkout of the "
+            "factory repo. source/ IS the brain: without it there is nothing to deploy.")
+    brain_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(SOURCE_ROOT, brain_dir, ignore=_make_stage_ignore(brain_dir),
+                    dirs_exist_ok=True)
+    ok(f"code staged into {brain_dir} from {SOURCE_ROOT} — one-to-one copy of source/, "
+       "no tarball, no build step")
+
 
 def stage_package(args):
+    """Stage the factory code into brains/<brain>/ WITHOUT clobbering runtime state, then seed the
+    brain-root context/policy files. source/ IS the brain root, so this is a copy of a tree, not an
+    assembly of parts."""
     _, brain_dir = brain_paths(args)
-    tar_path = Path(args.package) if getattr(args, "package", None) else _newest_package()
-    if not tar_path or not tar_path.is_file():
-        die("no code package found. Build one (build_package.sh) or pass --package "
-            f"<tar>. Looked in {DIST_DIR}.")
-    info(f"package: {tar_path.name}")
-    _verify_sha256(tar_path)
-    brain_dir.mkdir(parents=True, exist_ok=True)
-
-    def _safe(members):
-        for m in members:
-            target = (brain_dir / m.name).resolve()
-            if not str(target).startswith(str(brain_dir.resolve())):
-                die(f"refusing unsafe path in package: {m.name}")
-            if any(m.name == p or m.name.startswith(p + "/") for p in _STAGE_PROTECT):
-                if (brain_dir / m.name).exists():
-                    continue
-            yield m
-
-    with tarfile.open(tar_path, "r:gz") as tf:
-        tf.extractall(brain_dir, members=list(_safe(tf.getmembers())))
-    ok(f"code staged into {brain_dir}")
-    # Materialize the brain-root context/policy files from the staged policy_templates/
-    # collection (the tarball bundles all four — see build_package.sh) before any lock/provision.
+    _stage_from_source(brain_dir)
+    # Materialize the brain-root context/policy files (CLAUDE/agents/brain_core/invariants) BEFORE
+    # installer_1's ACL lock, so the brain ships with a real, locked policy instead of nothing.
     seed_brain_context_files(brain_dir, args.brain)
 
 
-# Brain-root context/policy files seeded from the staged policy_templates/ collection (the
-# tarball bundles the factory's rich brain_invariants.md plus the three shared context
-# templates). (template filename in policy_templates/, deployed filename at brain root).
-_CONTEXT_TEMPLATES = (
-    ("brain_invariants.md",      "brain_invariants.md"),   # factory-local rich policy
-    ("brain_CLAUDE.md.template", "CLAUDE.md"),             # bundled at build
-    ("brain_agents.md.template", "agents.md"),
-    ("brain_core.md.template",   "brain_core.md"),
-)
-
-
 def seed_brain_context_files(brain_dir, brain):
-    """Seed the four brain-root context/policy files (brain_invariants.md, CLAUDE.md, agents.md,
-    brain_core.md) from the staged <brain>/policy_templates/ collection, substituting
-    [BRAIN_NAME] + [AIOS_INSTALL_ROOT_PATH]. ONLY-IF-ABSENT (idempotent; never clobbers a live
-    brain's tuned policy on redeploy). Mirrors the Windows deployer — without it a deployed
-    brain ships with NO policy/context. See brain_security_model.md §8."""
-    src_dir = brain_dir / "policy_templates"
-    if not src_dir.is_dir():
-        warn(f"policy_templates/ not staged ({src_dir}) — the deployed brain will have NO "
-             "brain-root context/policy files.")
-        return
+    """Place the four brain-root context/policy files (CONTEXT_FILES), substituting [BRAIN_NAME] and
+    [AIOS_INSTALL_ROOT_PATH]. ONLY-IF-ABSENT: a live brain's tuned policy is never clobbered on
+    redeploy — which is exactly why they are seeded rather than copied with the rest of the tree.
+
+    Read straight from source/ at their FINAL names. There is no template store above the repo root
+    and no policy_templates/ hop to collect them into: source/ is the one place they live, so a clone
+    by a stranger has everything it needs (parity with windows_deploy_brain.py).
+
+    A missing file here is FATAL. installer_1 ACL-locks these read-only so the brain cannot edit its
+    own leash, and it silently locks NOTHING if the file is absent — so absence means a broken
+    checkout, and there is no version of that worth continuing past."""
     subs = {"[BRAIN_NAME]": brain, "[AIOS_INSTALL_ROOT_PATH]": "$AIOS_INSTALL_ROOT"}
-    seeded = 0
-    for tmpl, dest in _CONTEXT_TEMPLATES:
-        src = src_dir / tmpl
-        dst = brain_dir / dest
+    seeded = kept = 0
+    for name in CONTEXT_FILES:
+        src = SOURCE_ROOT / name
+        dst = Path(brain_dir) / name
         if not src.is_file():
-            warn(f"context template missing ({src}) — {dest} will not be seeded")
-            continue
+            die(f"context/policy source missing: {src}\n"
+                f"    Every brain must ship {name} — installer_1 ACL-locks it read-only, and it\n"
+                "    silently locks NOTHING if the file is not there. Incomplete checkout?")
         if dst.exists():
+            kept += 1
             continue  # never clobber a live/tuned context file on redeploy
         try:
             text = src.read_text(encoding="utf-8")
@@ -379,14 +475,9 @@ def seed_brain_context_files(brain_dir, brain):
             dst.write_bytes(text.encode("utf-8"))
             seeded += 1
         except OSError as e:
-            warn(f"could not seed {dest} ({e})")
-    ok(f"brain-root context/policy seeded ({seeded} file(s); existing kept) — "
-       "brain_invariants.md from the canonical 7-invariant policy")
-    # policy_templates/ is a TEMPLATE SOURCE, not deployed content — remove it once seeded.
-    try:
-        shutil.rmtree(src_dir, ignore_errors=True)
-    except Exception as e:
-        warn(f"could not remove staged policy_templates/ ({e}) — harmless")
+            die(f"could not seed {name} ({e})")
+    ok(f"brain-root context/policy seeded ({seeded} file(s); {kept} existing kept) — "
+       "from source/ at final names")
 
 
 # ---------------------------------------------------------------------------
@@ -930,7 +1021,6 @@ def parse_args():
     d.add_argument("--port", type=int, default=8443, help="gateway host port (default 8443)")
     d.add_argument("--bind", choices=("personal", "server", "127.0.0.1", "0.0.0.0"),
                    default=None, help="gateway bind (default: follow --posture)")
-    d.add_argument("--package", default=None, help="code package tar (default: newest in dist/)")
     d.add_argument("--install-root", default=None,
                    help="dir containing brains/<brain>/ (default: $AIOS_INSTALL_ROOT / autodetect)")
     d.add_argument("--skip-residency", action="store_true",
