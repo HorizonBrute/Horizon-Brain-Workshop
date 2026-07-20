@@ -1,0 +1,19 @@
+site_name: "Horizon Brain Workshop — Brain Factory"
+site_description: "Operational documentation for the brain factory: per-brain sealed RAG runtimes (ChromaDB + Ollama + nginx gateway)."
+docs_dir: docs
+theme:
+  name: material
+  palette:
+    scheme: slate
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - search.suggest
+    - search.highlight
+nav:
+  - Home: index.md
+  - Gateway Authorization:
+      - Bearer Auth SOP: gateway_bearer_auth_SOP.md
+      - Token Admin How-To: gateway_token_admin_howto.md
+      - Auth Verification Matrix: gateway_auth_verification_matrix.md
+      - Off-box Validation Cookbook: gateway_offbox_validation_cookbook.md
