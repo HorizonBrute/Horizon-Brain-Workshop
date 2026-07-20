@@ -8,8 +8,13 @@ Operational documentation for the brain factory. One line per document.
 
 ## Deploy and operate
 
-- [DEPLOYMENT.md](DEPLOYMENT.md) — authoritative deployment guide for a brain's engine: import, residency, backup.
-- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — symptom → diagnose → cause → fix notes for a deployed brain.
+These live with the code they describe, under `factory/source/system/brain_bin/` — the tree that
+ships into a deployed brain and that the policy `@`-pointers resolve against — and are linked here:
+
+- [DEPLOYMENT.md](../factory/source/system/brain_bin/DEPLOYMENT.md) — authoritative deployment guide for a brain's engine: import, residency, backup.
+- [OPERATIONS.md](../factory/source/system/brain_bin/OPERATIONS.md) — day-2 operations: env-knob reference, port map, service lifecycle.
+- [TROUBLESHOOTING.md](../factory/source/system/brain_bin/TROUBLESHOOTING.md) — symptom → diagnose → cause → fix notes for a deployed brain.
+- [brain_security_model.md](../factory/source/system/brain_bin/brain_security_model.md) — the brain's security & isolation model (the `brain_invariants.md` `@`-pointer target).
 
 ## Gateway authorization
 

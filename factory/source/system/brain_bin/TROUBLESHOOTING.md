@@ -4,13 +4,13 @@ Field-tested symptom → diagnose → cause → fix notes for a deployed brain (
 read-access TLS gateway on rootless Docker in WSL2). Written for an operator or support
 agent working a live box. Companion to `DEPLOYMENT.md` (architecture + the happy path).
 
-> **Running the ADR-0015/0017 Developer RAG stack** (4 services + neuron bundles on two private
+> **Running the Developer RAG stack** (4 services + neuron bundles on two private
 > networks, with in-gateway content capture)? §§A–D below cover the base Chroma+gateway engine
 > and residency, which still apply. The **RAG-stack-specific** failure modes — vanished published
 > ports after a bare `run`, content-capture verification, the apply-rollback bug, and rebuild-vs-not
 > — are in **§E** at the bottom. Operator model + knobs: `OPERATIONS.md`.
 
-**Mental model in one line:** the brain runs in a WSL2 distro `AIOS-<brain>`; nothing is
+**Mental model in one line:** the brain runs in a WSL2 distro `brain-<brain>`; nothing is
 reachable unless that distro is *booted*; a boot **residency/keepalive task** is what keeps
 it booted; the **gateway** (nginx) is the only thing that answers on the host port, and it is
 **hardened** (token-gated, TLS). Most "it's down" reports are really "the distro idled down."
@@ -19,8 +19,8 @@ it booted; the **gateway** (nginx) is the only thing that answers on the host po
 > **full chroma+gateway** compose (both containers), not just Chroma, hence "docker" not "chroma".
 > Its data volume is **`~/knowledge/brain_rw/chroma`** (that IS Chroma's DB, in the `brain_rw` zone
 > of the `knowledge/` data-in seam — brain invariant #4). The boot
-> keepalive task is **`<brain>-docker-keepalive`** (renamed from `AIOS-<brain>-residency`). An
-> already-deployed brain keeps the old names until re-deployed from a v0.4.0+ package.
+> keepalive task is **`<brain>-docker-keepalive`** (renamed from `AIOS-<brain>-residency`; an
+already-deployed brain keeps the old name until it is re-deployed).
 
 ---
 
@@ -30,7 +30,7 @@ All from the **brain's** Windows console (`whoami` → `<host>\<brain>`), becaus
 registered under the brain's account and per-user WSL hides it from everyone else:
 
 ```
-wsl -l -v                 # does AIOS-<brain> exist? STATE Running or Stopped?
+wsl -l -v                 # does brain-<brain> exist? STATE Running or Stopped?
 wsl -l --running          # "no running distributions" == the distro is DOWN (the #1 cause)
 ```
 
@@ -39,7 +39,7 @@ If the distro is **Stopped/absent from --running**, the gateway *cannot* be up �
 
 Boot + full triage in one (cold boot ~25–30s: systemd → user session → rootless docker):
 ```
-wsl -d AIOS-<brain> -- bash -l -c 'id; systemctl is-system-running; docker ps -a'
+wsl -d brain-<brain> -- bash -l -c 'id; systemctl is-system-running; docker ps -a'
 ```
 Expect `uid=1000(<brain>)`, `running`, and both `<brain>-chroma` + `<brain>-gateway` containers
 `Up` (they auto-start via `restart: unless-stopped` the moment docker starts on boot).
@@ -58,7 +58,7 @@ gateway isn't persistent, that task is either **inert** (§B) or **exiting inste
 
 **Confirm.** Boot it by hand and see everything come up healthy:
 ```
-wsl -d AIOS-<brain> -- bash -l -c 'docker ps'      # both containers Up == stack is fine
+wsl -d brain-<brain> -- bash -l -c 'docker ps'      # both containers Up == stack is fine
 ```
 If the stack is healthy when booted by hand, the deployment is good — the problem is purely
 the keepalive. Continue to §B/§C.
@@ -81,17 +81,15 @@ $f="$env:TEMP\ur.cfg"; secedit /export /areas USER_RIGHTS /cfg $f | Out-Null
 if ((Select-String "SeBatchLogonRight" $f) -match [regex]::Escape($sid)) {"BATCH: GRANTED"} else {"BATCH: MISSING"}
 ```
 
-**Fix (elevated).** Grant it with the AIOS helper (or `secedit` by hand):
-```
-python <HORIZON_SYSTEM>\sbin\horizon_aios_brain_logon_rights.py grant <brain>
-python <HORIZON_SYSTEM>\sbin\horizon_aios_brain_logon_rights.py check <brain>
-```
-> Code note: **fixed in package v0.4.0** — `residency.register()` now grants `SeBatchLogonRight`
-> at **baseline** for every brain (via the AIOS LSA helper above) before it creates the task, so a
-> fresh v0.4.0 deploy should never hit this. Seeing `267011` on a v0.4.0 deploy means the grant
-> failed (check the deploy log for the `[WARN] SeBatchLogonRight` line) or the helper wasn't found
-> (non-AIOS host) — grant it by hand as above. (Previously the right was gated behind
-> `create_brain --automation scheduled`, which is why the first sorcerypunk_dev task was inert.)
+**Fix (elevated).** Re-run the deploy — `residency.register()` grants the right at baseline. To
+grant it by hand instead, add the brain's SID to `SeBatchLogonRight` (`ntrights -u <brain> +r
+SeBatchLogonRight`, or an `LsaAddAccountRights` call). Avoid a `secedit` policy **import** — it
+rewrites unrelated rights on the box; the deploy uses the additive LSA call for that reason.
+
+> Code note: `residency.register()` grants `SeBatchLogonRight` at **baseline** for every brain
+> before it creates the task, so a current deploy should never hit this. Seeing `267011` anyway
+> means the grant failed — check the deploy log for the `[WARN] SeBatchLogonRight` line, then
+> grant it by hand as above.
 
 ---
 
@@ -102,17 +100,17 @@ to `Ready`; the VM starts then idles down. Re-running by hand, the keepalive exi
 **syntax error / exit code 2**.
 
 **Cause.** The keepalive was an **inline shell string** with `$(...)` and nested quotes, e.g.
-`wsl -d AIOS-<brain> -- bash -lc "cd ~/docker; for i in $(seq 1 30); do docker compose up -d && break; sleep 5; done; exec sleep infinity"`.
+`wsl -d brain-<brain> -- bash -lc "cd ~/docker; for i in $(seq 1 30); do docker compose up -d && break; sleep 5; done; exec sleep infinity"`.
 The `wsl.exe -- bash -lc "…"` invocation path (and the Task Scheduler XML `<Arguments>` round-trip)
 **mangles** `$(seq 1 30)` and the nested quotes — the `for` loop is split across lines →
 `syntax error near unexpected token '2'` → bash exits **2** *before* reaching `exec sleep
 infinity`, so nothing holds the VM. (Same class as the `(a|b)` regex breaking under a
 double-`bash -lc` wrap.)
 
-**Fix — use a script file, never inline shell for anything non-trivial.** **Fixed in package
-v0.4.0:** the deployer now ships this script by default (`residency.write_keepalive()` in phase 2)
-and the task runs `bash -l <path>`, so a fresh v0.4.0 deploy is not inline and should not hit exit
-2. If you are recovering an older deploy by hand, put the logic in a file inside the distro and
+**Fix — use a script file, never inline shell for anything non-trivial.** The deployer ships this
+script by default (`residency.write_keepalive()` in phase 2) and the task runs `bash -l <path>`, so
+a current deploy is not inline and should not hit exit 2. If you are recovering an older deploy by
+hand, put the logic in a file inside the distro and
 have the task run it as a **login** shell (so `/etc/profile.d` sets the rootless-docker env):
 
 `~/keepalive.sh` (in the distro, owned by the brain):
@@ -126,7 +124,7 @@ exec sleep infinity
 Point the task at it — **absolute path, `-l` for the login shell, no quotes/parens/`$()` on the
 command line** (elevated):
 ```
-schtasks /change /tn "<task>" /tr "wsl.exe -d AIOS-<brain> -- bash -l /home/<brain>/keepalive.sh"
+schtasks /change /tn "<task>" /tr "wsl.exe -d brain-<brain> -- bash -l /home/<brain>/keepalive.sh"
 ```
 (`/change` re-prompts for the run-as password on a Password-logon task — that's normal; it's the
 brain's keystore password going back into the task's LSA credential, masked, not logged.)
@@ -163,7 +161,7 @@ listener lives in the distro's mirrored namespace with **no Windows process owni
 so it may not appear as a Windows listener even with `-an` — yet it's fully reachable (that's
 what lets a LAN client reach it with no portproxy). Authoritative check is **inside** the distro:
 ```
-wsl -d AIOS-<brain>            # then, at the bash prompt:
+wsl -d brain-<brain>            # then, at the bash prompt:
 ss -ltnp | grep -E ':8000|:<port>'
 ```
 
@@ -186,8 +184,8 @@ NAT → a `172.x`/`10.x` `eth0` and no `loopback0`.
 
 **Server posture is reachable, but only on host loopback — not the LAN.** Two independent causes used to
 be open deploy-tooling gaps; both are now **FIXED in tooling — implemented, pending live LAN verification**
-(a fresh deploy + off-box test has not yet confirmed them end-to-end; see project NOTE 001-31). If an
-off-box client still can't reach the RAG endpoint after a v0.4.0+ deploy, work through both in order:
+(a fresh deploy + off-box test has not yet confirmed them end-to-end). If an off-box client still
+can't reach the RAG endpoint after a current deploy, work through both in order:
 - **`.wslconfig` is PER-WINDOWS-USER and must live in the BRAIN account's RESOLVED profile — now written by
   deploy.** `--posture server` flips the in-distro bind to `0.0.0.0`, but the mirrored networking that
   carries that to the LAN is configured in `%UserProfile%\.wslconfig` of **whoever launches the distro** —
@@ -210,11 +208,11 @@ off-box client still can't reach the RAG endpoint after a v0.4.0+ deploy, work t
   `gateway_port.py` used to add an inbound rule for the single `--port` (chroma, e.g. 8000) — NOT the action
   path-router (8443, the real RAG endpoint) or ollama (11434), so off-box clients couldn't reach those even
   with mirrored working. It now reconciles Windows Defender rules against `brain.env`, opening one
-  subnet-scoped rule per **exposed** surface — `AIOS-<brain>-gw-<surface>` (e.g. `-gw-action`, `-gw-chroma`,
+  subnet-scoped rule per **exposed** surface — `brain-<brain>-gw-<surface>` (e.g. `-gw-action`, `-gw-chroma`,
   `-gw-ollama`), `-RemoteAddress LocalSubnet -Profile Private,Domain` — wherever `<SURFACE>_EXPOSE=on` AND
   `<SURFACE>_GATEWAY_BIND=0.0.0.0`. Loopback-bound surfaces get no rule (stale ones are deleted), the legacy
-  single `AIOS-<brain>-gateway` rule is auto-retired, and `firewall_release()` removes all per-surface rules
-  on teardown. Check the live rules with `Get-NetFirewallRule -DisplayName 'AIOS-<brain>-gw-*'` and confirm
+  single `brain-<brain>-gateway` rule is auto-retired, and `firewall_release()` removes all per-surface rules
+  on teardown. Check the live rules with `Get-NetFirewallRule -DisplayName 'brain-<brain>-gw-*'` and confirm
   one exists for each surface you expect exposed.
 
 ---
@@ -240,17 +238,17 @@ off-box client still can't reach the RAG endpoint after a v0.4.0+ deploy, work t
 
 ---
 
-## §E — Developer RAG stack (ADR-0015/0017: two networks, neuron bundles, path-router)
+## §E — Developer RAG stack (two networks, neuron bundles, path-router)
 
 The current Developer RAG brain runs **chroma + ollama + gateway + fail2ban** (resident) plus
 **neuron bundles** — a per-collection pair of an **input neuron** (`<brain>-input_neurons`, write,
 batch, on `brain_net` direct to chroma/ollama) and an **action neuron** (`<brain>-action_neurons`,
 read, a long-lived query server on `neuron_net` behind the gateway `:8443` path-router). The
 gateway bridges both nets and is the only published surface. Operator model, knobs, the bundle
-model, and the change-and-apply loop: **`OPERATIONS.md`**. Design of record: ADR-0015/0017.
+model, and the change-and-apply loop: **`OPERATIONS.md`**.
 
-> ⚠️ **Factory-mirror parity.** This stack is **live-proven in `brains/sorcerypunk_dev`**. The
-> factory now ships the two-network / bundle / path-router config as the `brain_etc.example/`
+> ⚠️ **Factory-mirror parity.** This stack is live-proven on a deployed brain. The
+> factory ships the two-network / bundle / path-router config as the `brain_etc.example/`
 > template (seeded into `brain_etc/` at deploy and laid by `reapply_brain_configs.py`), but the
 > factory **code** mirror (`factory/system/brain_sbin/gateway_config.py`) may still lag the live generator
 > in spots. These notes describe the **live** stack; verify against the deployed brain before assuming.
@@ -321,7 +319,7 @@ enforcing token-role authz (same as base §D).
 `njs/inspect.js`) goes **missing** from `~/docker/nginx/`, and the "rollback" leaves the stack in a
 worse state than before.
 
-**Root cause (a real latent bug — ADR-0015 Follow-up 6).** The sync **replaces** files with `mv`
+**Root cause (a real latent bug).** The sync **replaces** files with `mv`
 (needs only parent-dir write → succeeds on root-owned runtime files), but the **rollback restores**
 with `cp -p` (needs file write → **fails** on those same root-owned files with "Permission denied").
 So a failed post-sync action leaves the NEW files in place and only `rm`s genuinely-new ones — the
@@ -352,7 +350,7 @@ Never trust a blind recreate of the live gateway — validate in the throwaway f
 
 ### §E4 — Verifying content capture is working
 
-Content capture is the whole point of ADR-0015 Phase 2. A **good** unified-log line (one JSON
+Content capture is the whole point of the inspection gateway. A **good** unified-log line (one JSON
 object per request, `escape=json`) carries the uniform schema:
 ```
 {"time":"…","remote_addr":"…","host":"…","method":"POST","uri":"/api/embeddings",
@@ -417,7 +415,7 @@ rebuilding is slow and changes nothing when the code layer is untouched.
 
 ---
 
-## What to escalate (ADR-0015 stack)
+## What to escalate (RAG stack)
 
 - **`request+response` response capture** never populates `resp_body` after the §E4 checks pass →
   the njs module presence / `r.sendBuffer` contract (engineering; unproven-live path).

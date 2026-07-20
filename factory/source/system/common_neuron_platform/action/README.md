@@ -35,7 +35,7 @@ system/common_neuron_platform/action/
   Publish it off-box with `publish_to_lan_ports: [8443]` in the neuron's zone block +
   `compose.action-neuron-gateway.yaml`; the gateway's :8443 path-router forwards
   `/{bundle}/{neuron}/ask` → `<neuron>:8080/ask` (prefix stripped), so the app serves plain root
-  paths. POC: the :8443 surface is unauthenticated (inspected, reader-token-only) — securing it is
-  a tracked follow-up.
+  paths. The :8443 surface defaults to **token auth** (`ACTION_GW_AUTHZ=token`, requiring an
+  `action:call` bearer); set `ACTION_GW_AUTHZ=open` to disable it for a trusted/inspected POC.
 
 Same read-only-rootfs posture and offline-at-runtime constraint as `common_neuron_platform/input/`.

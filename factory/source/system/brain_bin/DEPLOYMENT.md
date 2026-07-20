@@ -2,16 +2,19 @@
 
 Authoritative deployment doc for a brain's engine — the **base engine layer** (import,
 residency, backup). Generic across brains; substitute your own `<brain>` for the
-`<brain_name>` examples. Supersedes the earlier Docker-Desktop-era notes
-(`docker_readme.md`, `brain_login_howto.md`, `knowledge_verify_howto.md`), which describe an
-abandoned model — see the SECURITY MODEL section for why.
+`<brain_name>` examples. Supersedes the earlier Docker-Desktop-era notes, which describe an abandoned model — see the
+security/isolation section for why.
 
 Audience: an IT admin (or an agent) standing up or operating a brain.
+
+> **`<install-root>` / `%AIOS_INSTALL_ROOT%` below** is the directory that holds `<brain>/`. The deploy
+> takes it from `--install-root`, else the `AIOS_INSTALL_ROOT` environment variable; there is no default
+> and no search — if neither is set, the deploy stops and tells you so.
 
 > **Scope note.** This guide covers the base-engine mechanics (WSL import, residency, backup).
 > The **normal deploy is the orchestrator** (`windows_deploy_brain.py` / `linux_deploy_brain.py`),
 > which drives the full end-to-end onboarding — see **§0 (end-to-end flow)** and
-> `deploy/README.md`. The current **Developer RAG stack** (ADR-0015/0017: chroma + ollama +
+> `deploy/README.md`. The current **Developer RAG stack** (chroma + ollama +
 > gateway + fail2ban on two private networks, **neuron bundles** — input (write) + action (read),
 > the `:8443` path-router, and in-gateway content capture) — its operator model, the
 > `brain.env`/`gateway.conf` control panel, the ingest command, and the config change-and-apply
@@ -24,10 +27,9 @@ The orchestrator sequences every building block into one converging deploy. The 
 import (§3) is one stage of it; the full-contract flow (aligned with `deploy/README.md`):
 
 1. **Preflight + create-brain** — OS user/group/workspace/keystore password.
-2. **Stage the code** into `brains/<brain>/` — COPIED straight from the factory source tree
+2. **Stage the code** into `<install-root>/<brain>/` — COPIED straight from the factory source tree
    (no tarball, no build step): code + `brain_etc.example/` + the neuron/impulse/knowledge
-   scaffolds (tier-4 runtime state never clobbered). `deploy --package <tar>` opts into a
-   prebuilt snapshot instead.
+   scaffolds (tier-4 runtime state never clobbered).
 3. **Engine** — **build from scratch by default** (download base Debian → provision → import
    under the brain account, §3), first-boot,
    stack up; register the **residency** boot task (below) — its keepalive layers the `*_EXPOSE`
@@ -46,9 +48,9 @@ import (§3) is one stage of it; the full-contract flow (aligned with `deploy/RE
 
 > **`--posture server` today = correct in-distro bind. The two deploy-tooling gaps that used to keep it
 > host-LOOPBACK-only are now FIXED in tooling; LAN reach is IMPLEMENTED but PENDING LIVE LAN VERIFICATION
-> (a fresh deploy + off-box test has not yet confirmed it end-to-end — see project NOTE 001-31):**
-> 1. **Mirrored networking is now installed per-brain (config resolved-and-written; ENGAGEMENT pending
->    live proof at Phase 9).** Server binds `0.0.0.0` inside the distro, but under WSL2 NAT that only
+> (a fresh deploy + off-box test has not yet confirmed it end-to-end):**
+> 1. **Mirrored networking is now installed per-brain (config resolved-and-written; engagement pending
+>    live proof).** Server binds `0.0.0.0` inside the distro, but under WSL2 NAT that only
 >    surfaces on host `127.0.0.1`. LAN reach needs `networkingMode=mirrored` in the **brain account's**
 >    `%UserProfile%\.wslconfig` — the operator's `.wslconfig` does not govern the brain's VM. The catch:
 >    that path is **NOT** a string-built `C:\Users\<brain>\.wslconfig`. If a stale/leftover dir squats the
@@ -62,14 +64,14 @@ import (§3) is one stage of it; the full-contract flow (aligned with `deploy/RE
 >    `brain_etc/wsl/.wslconfig`. **Remaining host-side risk:** on some hosts mirrored hits a persistent
 >    `0x8007054f` fallback to NAT — writing the config to the correct place does NOT guarantee mirrored
 >    ENGAGES, so live proof (distro `eth0` = host LAN IP + a `loopback0` iface, reachable off-box) is
->    deferred to the Phase 9 clean-reinstall PROVE.
+>    still outstanding.
 > 2. **Firewall is now derived from the exposed GW surfaces (implemented, pending verification).**
 >    `firewall_apply()` used to open only the chroma `--port` (8000), leaving the action path-router (8443)
 >    and ollama (11434) with no inbound rule. It now reconciles Windows Defender rules against `brain.env`:
->    one subnet-scoped rule (`AIOS-<brain>-gw-<surface>`, `-RemoteAddress LocalSubnet -Profile Private,Domain`)
+>    one subnet-scoped rule (`brain-<brain>-gw-<surface>`, `-RemoteAddress LocalSubnet -Profile Private,Domain`)
 >    per surface that is actually exposed (`<SURFACE>_EXPOSE=on` AND `<SURFACE>_GATEWAY_BIND=0.0.0.0`);
 >    loopback-bound surfaces get no rule and any stale rule is deleted. The legacy single
->    `AIOS-<brain>-gateway` rule is auto-retired, and `firewall_release()` removes all per-surface rules on
+>    `brain-<brain>-gateway` rule is auto-retired, and `firewall_release()` removes all per-surface rules on
 >    teardown.
 
 ### How a source edit reaches a brain
@@ -77,13 +79,13 @@ import (§3) is one stage of it; the full-contract flow (aligned with `deploy/RE
 **There is no build/repackage step anymore.** A source edit **anywhere in the factory tree**
 reaches the next `deploy` directly — both the orchestrator and the payload are now live:
 
-1. **Orchestrator — run in place.** `factory/windows_deploy_brain.py` (and its Linux sibling
+1. **Orchestrator — run in place.** `windows_deploy_brain.py` at the repo root (and its Linux sibling
    `linux_deploy_brain.py`) is the installer you execute directly. Your edit to it is **LIVE on
    the next `deploy`** — as it always was.
 2. **Payload — now COPIED from the source tree at deploy.** Everything under `factory/system/**`
    (e.g. `system/brain_sbin/gateway_port.py`, the keepalive, `gateway_config.py`) is staged by
    `_stage_from_source`, which COPIES the member set straight from the factory source tree into
-   `brains/<brain>/system/...`. There is no tarball and no `build_package.sh` step in between, so
+   `<install-root>/<brain>/system/...`. There is no tarball and no build step in between, so
    **editing a payload file IS live on the next `deploy`** — no repackage. At runtime the brain
    still executes its **own staged copy**, never the factory original; that copy is just refreshed
    from source every deploy.
@@ -93,11 +95,14 @@ Both loops collapse to one:
 
 - **Anything in the factory tree:** edit → `deploy` → brain has it.
 
-> **The one exception** is the opt-in `deploy --package <tar>` snapshot path: it deploys a
-> prebuilt tarball (built separately by `deployer_tooling/build_package.sh`) and therefore
-> **freezes the code at build time** — a later source edit does not reach a `--package` deploy
-> until you rebuild that tar. This path exists only for offline/pinned installs; the default
-> needs no tarball.
+There is no snapshot/tarball install path and no exception to the rule above: the checked-out
+source tree is the only thing a deploy reads from.
+
+**Base image (offline/pinned engines).** `--from-scratch` builds the WSL engine from a base rootfs.
+By default it pulls a fresh Debian; `--imagefile <rootfs>` pins a local base (e.g.
+`base_images/debian-base.rootfs.tar`). A base rootfs tarball is a rebuildable binary artifact —
+keep it git-ignored and track only its `.sha256` manifest, so the pinned base stays verifiable
+without committing the multi-GB blob.
 
 A plain `deploy` (no `--from-scratch`) reuses the existing distro and just **re-stages the code +
 re-runs gateway config** — the fast way to push a code fix onto a running brain.
@@ -150,9 +155,12 @@ provisioned distro; it contains:
 
 ## 3. Deploy (register under the brain account) - one interactive step
 
-Everything is CLI, so the admin drives it as the brain via `runas`. The password
-is in the OS keystore:
-`python C:\Horizon.AIOS\horizon_system\sbin\horizon_aios_brain_credential.py get <brain_name> --show`
+Everything is CLI, so the admin drives it as the brain via `runas`. The password was
+generated at create-brain time and stored in the OS keyring under the brain-owned
+namespace — service `brain:<brain_name>`, username `account_password`:
+```
+python -c "import keyring; print(keyring.get_password('brain:<brain_name>','account_password'))"
+```
 
 1. Open a shell **as the brain**:
    ```
@@ -162,32 +170,32 @@ is in the OS keystore:
 
 2. Import the engine under the brain's account, VHDX into the brain folder:
    ```
-   wsl --import AIOS-<brain_name> ^
-     "C:\Horizon.AIOS\brains\<brain_name>\wsl\disk" ^
-     "C:\Horizon.AIOS\brains\<brain_name>\wsl\<brain_name>_engine.tar" ^
+   wsl --import brain-<brain_name> ^
+     "%AIOS_INSTALL_ROOT%\<brain_name>\wsl\disk" ^
+     "%AIOS_INSTALL_ROOT%\<brain_name>\wsl\<brain_name>_engine.tar" ^
      --version 2
    ```
 
 3. Confirm it is registered under the brain (per-user WSL):
    ```
-   wsl -l -v            :: should list AIOS-<brain_name>
+   wsl -l -v            :: should list brain-<brain_name>
    ```
 
-   **First boot after import:** run `wsl --terminate AIOS-<brain_name>` once before
+   **First boot after import:** run `wsl --terminate brain-<brain_name>` once before
    bringing the stack up, so `wsl.conf`'s `systemd=true` + default-user take effect (mirrors
    the build-time restart). The next `wsl -d ...` cold-boots systemd → user session → docker.
 
 4. Bring Chroma up and verify (Chroma is **sealed behind the TLS gateway** — verify over
    TLS with the stack CA, not a plaintext port):
    ```
-   wsl -d AIOS-<brain_name> -- bash -lc "cd ~/docker && docker compose up -d && sleep 6 && curl -s --cacert ~/gateway/gateway_out/cert.pem https://127.0.0.1:8000/api/v2/heartbeat"
-   wsl -d AIOS-<brain_name> -- bash -lc "ls -ln ~/knowledge/brain_rw/chroma"   :: files owned by uid 1000
+   wsl -d brain-<brain_name> -- bash -lc "cd ~/docker && docker compose up -d && sleep 6 && curl -s --cacert ~/gateway/gateway_out/cert.pem https://127.0.0.1:8000/api/v2/heartbeat"
+   wsl -d brain-<brain_name> -- bash -lc "ls -ln ~/knowledge/brain_rw/chroma"   :: files owned by uid 1000
    ```
 
 5. Once verified, the source tarball can be deleted (the live engine is the VHDX):
-   `del "C:\Horizon.AIOS\brains\<brain_name>\wsl\<brain_name>_engine.tar"`
+   `del "%AIOS_INSTALL_ROOT%\<brain_name>\wsl\<brain_name>_engine.tar"`
 
-The owner (non-brain) account will NOT see `AIOS-<brain_name>` in its `wsl -l`
+The owner (non-brain) account will NOT see `brain-<brain_name>` in its `wsl -l`
 or `\\wsl$` - that is the isolation working.
 
 ### Residency — keep the engine continuously reachable (REQUIRED for a live gateway)
@@ -205,7 +213,7 @@ task runs it as `bash -l <path>` — **not** an inline `bash -lc "…"` string:
 
 ```
 # The task action (as registered by deploy/residency.py):
-wsl.exe -d AIOS-<brain_name> -- bash -l /home/<brain_name>/keepalive.sh
+wsl.exe -d brain-<brain_name> -- bash -l /home/<brain_name>/keepalive.sh
 
 # ~/keepalive.sh inside the distro (owned by the brain, uid 1000):
 #!/usr/bin/env bash
@@ -218,7 +226,7 @@ exec sleep infinity
   bash re-splits again). An earlier inline keepalive with a `for i in $(seq 1 30)` retry loop was
   double-wrapped, its `$( )` spliced newlines, `for` split on them, and bash died
   `syntax error near '2'` (exit 2) **before** `exec sleep infinity` — so the VM idled down and the
-  gateway vanished. A file has no round-trip. See TROUBLESHOOTING.md and journal_015.
+  gateway vanished. A file has no round-trip. See TROUBLESHOOTING.md §C.
 - **No retry loop.** `restart: unless-stopped` on the compose services already auto-starts both
   containers at boot, so the keepalive only nudges the stack up once and then `exec sleep infinity`
   to hold the WSL utility VM resident — the process inside the distro is what keeps the VM alive.
@@ -238,14 +246,14 @@ exec sleep infinity
 > for every brain.** A Password-logon task's principal cannot launch without it: the task sits inert
 > at `Last Result 267011` (has-not-run) forever with no error surfaced. (This was the concrete reason
 > <brain_name>'s first task was dead on arrival — the right used to be gated behind
-> `create_brain --automation scheduled`.) The grant uses the surgical, additive AIOS LSA helper
-> (`horizon_aios_brain_logon_rights.py`), not a `secedit` policy reimport.
+> `create_brain --automation scheduled`.) The grant is applied through a surgical, additive LSA
+> call (`LsaAddAccountRights` against the brain's SID), not a `secedit` policy reimport — an
+> import would rewrite unrelated rights on the box.
 >
 > **Password logon is the default** (S4U registration for another user needs `SeTcbPrivilege`, which
 > a plain admin lacks → `Access is denied`). Re-run is idempotent (`/f`);
 > `installer_1 --skip-residency` deploys without the keepalive; `--residency-logon s4u` opts into the
-> passwordless experiment. **Validated end-to-end by the LIFECYCLE-02 reboot gate (PASSED
-> 2026-07-03):** after a full host reboot, with no manual step, the gateway answered and the task was
+> passwordless experiment. **Validated end-to-end by a full-reboot gate:** after a host reboot, with no manual step, the gateway answered and the task was
 > `Running` (`Last Result 267009`) from a session-0 boot fire — persistence survives a real reboot.
 > The deploy orchestrator's `verify` stage now asserts the task is `Running` (holding the distro), so
 > a deploy can no longer false-green with the stack merely up-at-the-moment.
@@ -268,7 +276,7 @@ itself current automatically. Aggressive updates make backups load-bearing.
 
 ## 5. Operations
 
-Run as the brain (from a `runas` shell, or `wsl -d AIOS-<brain_name> -- ...`):
+Run as the brain (from a `runas` shell, or `wsl -d brain-<brain_name> -- ...`):
 
 ```
 cd ~/docker
@@ -292,15 +300,15 @@ the entire engine + data**. Two layers:
 - **In-distro snapshots** (automatic, above): fast restore of just the vector data.
   Restore one:
   ```
-  wsl -d AIOS-<brain_name> -- bash -lc "cd ~/docker && docker compose down && \
+  wsl -d brain-<brain_name> -- bash -lc "cd ~/docker && docker compose down && \
     rm -rf ~/knowledge/brain_rw/chroma/* && zstd -dc ~/backups/chroma_<ts>.tar.zst | tar -C ~/knowledge/brain_rw/chroma -xf - && \
     docker compose up -d"
   ```
 - **Whole-engine backup** (disaster recovery), as a Windows scheduled task run as the
   brain:
   ```
-  schtasks /create /tn "AIOS-<brain_name>-engine-backup" /ru <brain_name> /rp <pw> ^
-    /sc DAILY /st 04:00 /tr "wsl --export AIOS-<brain_name> C:\Horizon.AIOS\brains\<brain_name>\wsl\backups\engine_%DATE%.tar"
+  schtasks /create /tn "brain-<brain_name>-engine-backup" /ru <brain_name> /rp <pw> ^
+    /sc DAILY /st 04:00 /tr "wsl --export brain-<brain_name> %AIOS_INSTALL_ROOT%\<brain_name>\wsl\backups\engine_%DATE%.tar"
   ```
   And keep WSL current:
   ```
@@ -337,8 +345,7 @@ the entire engine + data**. Two layers:
 
 ## 9. Packaging notes (future)
 
-This brain was built by hand-run staged scripts (see the workshop journal). To
-"packagize": the staged provisioning scripts become an installer, and the engine
-artifact (this `.tar`) becomes the shippable image. `onboard.py` remains the
-admin-run host-prep seam. The compose file and the whole model are portable to a
-native Linux host unchanged (rootless Docker in the brain's home).
+The staged provisioning scripts are already the installer, and the engine artifact (the
+`.tar`) is the shippable image. The compose file and the whole model are portable to a
+native Linux host unchanged (rootless Docker in the brain's home) — see
+`linux_deploy_brain.py`.

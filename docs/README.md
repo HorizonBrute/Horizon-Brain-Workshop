@@ -40,7 +40,7 @@ throughout these docs means that directory — the one that contains `<brain>/`.
 > orchestrator (`windows_deploy_brain.py`) runs in place, AND the payload under
 > `factory/source/system/**` is **copied from the source tree at deploy time** — so a source
 > edit anywhere in this repo is live on the next `deploy`. See **"How a source edit reaches a
-> brain"** in [`DEPLOYMENT.md`](DEPLOYMENT.md) (§0).
+> brain"** in [`DEPLOYMENT.md`](../factory/source/system/brain_bin/DEPLOYMENT.md) (§0).
 
 ## The orchestrator — one entry → working brain
 Host-side tooling (NOT staged inside the per-brain instance — it runs *before* the brain
@@ -133,5 +133,5 @@ only `*.example`; EMPTY templates ship, a POPULATED map is refused as a leak), T
   `gateway_token` needing `/mnt`; `run_as_brain` ~1024-char cap). Treat as a parallel
   block-fix track the orchestrator consumes.
 - **LAN reach under `--posture server`** is implemented but not yet confirmed by a live
-  off-box test — see [`DEPLOYMENT.md`](DEPLOYMENT.md) §0 and
-  [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md) §D.
+  off-box test — see [`DEPLOYMENT.md`](../factory/source/system/brain_bin/DEPLOYMENT.md) §0 and
+  [`TROUBLESHOOTING.md`](../factory/source/system/brain_bin/TROUBLESHOOTING.md) §D.
