@@ -235,6 +235,17 @@ older build, update — or run from a context where the brain credential resolve
 `$AIOS_INSTALL_ROOT` / export the provider keyring seam) so the keystore hit succeeds instead of
 prompting. A wrong credential then surfaces as a nonzero rc the checks already `die` on, not a hang.
 
+**Deploy dies at the gateway step: `port <N> is reserved by brain '<other>'`.**
+`gateway_port ERROR: port 8000 is reserved by brain '<other>' (registry …\gateway_ports.json) …
+auto-allocation is deferred`, and the deploy exits non-zero after the engine is already built/imported.
+**Cause:** deploying a **second** brain into the same AIOS root shares one port registry, and the new
+brain took the **default** chroma port (`8000`) that an existing brain already holds. There is no
+auto-allocation yet, so the collision is fatal rather than resolved. **Fix:** re-run `deploy` with an
+explicit free `--port` (e.g. `--port 8001`); `verify` then needs the matching `--port`. The
+already-built engine tar is reused (no rebuild) if you re-run without `--from-scratch`. Check current
+reservations in `<AIOS_ROOT>\gateway_ports.json`. **Do NOT** hand-edit another brain's row — teardown
+of your brain releases only its own row (the other brain's reservation is left intact by design).
+
 **Leftover config folder / "split brain" after a custom `--install-root`.**
 After `teardown --purge`, an inert `<root>\brains\<brain>\` (holding `brain_etc/`, `system/`) is still
 present under a **custom** `--install-root`, even though the account, distro, and the
