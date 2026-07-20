@@ -3069,6 +3069,22 @@ def cmd_teardown(args):
 def cmd_verify(args):
     validate_brain_name(args.brain)
     banner(f"Verify brain: {args.brain}")
+    # verify() drives EVERY in-distro probe (NIC gate, gateway heartbeats, docker ps/-a)
+    # through run_as_brain.py, because brain-<brain> is registered in the BRAIN account's
+    # per-user WSL hive and is invisible to this elevated host/owner logon (NOTE 001-28; the
+    # same per-user invisibility handled in cmd_teardown / distro_imported_as_brain). Those
+    # hops only run NON-INTERACTIVELY if run_as_brain can resolve the brain credential from
+    # the OS keystore — which needs the platform's namespace advertised via
+    # $BRAIN_KEYRING_SERVICE. deploy's INLINE verify passes because cmd_deploy exports that
+    # seam (+ install root) first; standalone verify did NOT, so the FIRST hop (the NIC gate)
+    # fell through to run_as_brain's getpass fallback and blocked on stdin forever — the
+    # observed "banner, then zero output, had to be killed" hang. Establish the SAME env
+    # deploy/teardown set before hopping, so the hops authenticate and RETURN (a bad
+    # credential surfaces as a nonzero rc that verify's checks already die on) instead of
+    # blocking. Mirrors cmd_teardown (2951-2955) and cmd_deploy (2520-2522) exactly.
+    root, _ = brain_paths(args)
+    os.environ[INSTALL_ROOT_ENV] = str(root)
+    _export_provider_keyring_seam()
     verify(args)
 
 
