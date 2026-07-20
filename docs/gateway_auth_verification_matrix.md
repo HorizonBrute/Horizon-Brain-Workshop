@@ -123,8 +123,8 @@ The matrix above proves the **auth boundary**; this script proves the **upload p
 
 ```powershell
 # writer token comes from your env (never hardcode it); defaults hit the local gateway
-$env:<WRITER_TOKEN_ENV>   # must be set to a chroma:writer-scoped token minted in brain_etc/gateway/token_registry
-python testupload_through_gateway.py
+$env:CHROMA_WRITER_TOKEN = "<a chroma:writer-scoped token minted in brain_etc/gateway/token_registry>"
+python testupload_through_gateway.py   # defaults to the repo's shipped sample docs
 # override the docs dir if you like:
 python testupload_through_gateway.py C:\some\other\docs
 ```

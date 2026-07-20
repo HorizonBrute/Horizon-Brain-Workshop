@@ -22,6 +22,7 @@ ships into a deployed brain and that the policy `@`-pointers resolve against —
 - [gateway_token_admin_howto.md](gateway_token_admin_howto.md) — operator how-to: create, rotate, revoke, and list gateway bearer tokens.
 - [gateway_auth_verification_matrix.md](gateway_auth_verification_matrix.md) — copy-paste by-hand matrix to prove gateway auth is live (localhost / Chroma).
 - [gateway_offbox_validation_cookbook.md](gateway_offbox_validation_cookbook.md) — off-box / external LAN validation from a separate host across all services (chroma :8000, ollama :11434, action :8443).
+- [testupload_through_gateway.py](testupload_through_gateway.py) — stdlib one-shot upload smoke test: pushes docs INTO the store through the gateway with a `chroma:writer` token (companion to the verification matrix §6).
 
 ## Diagrams
 
