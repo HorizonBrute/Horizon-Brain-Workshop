@@ -841,8 +841,6 @@ def gateway(args):
     if rc != 0:
         die(f"seam apply + stack recreate FAILED (rc={rc}) — the mode-C gateway is not live.\n{out}{e}")
     ok("seam applied + base stack recreated (chroma + gateway + ollama + fail2ban, mode C live)")
-    else:
-        ok("seam applied + gateway recreated (mode C admission + bootstrap tokens live)")
 
 
 # ---------------------------------------------------------------------------
