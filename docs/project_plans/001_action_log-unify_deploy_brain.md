@@ -11,3 +11,4 @@ Do not rewrite history; only append. This is a `log` doc — no YAML frontmatter
 2026-07-21T00:00:03Z,logged BUG-001-1 (Linux gateway cert false-green) + DEBT-001-1/2/3; dev_brain left down by design (NOTE 001-3)
 2026-07-21T00:00:04Z,NOTE 001-1 RESOLVED — user confirmed Linux engine = docker save + ollama-volume tar + config/cert bundle; Section 3 unblocked
 2026-07-21T00:00:05Z,built deploy_brain.py foundation — Section 1 (PlatformBackend + Linux/Windows backends) + Section 6 (shared cert stage, no-arg gen-cert + rc-check); selftest green, BUG-001-1 closed at contract level
+2026-07-22T02:41:05Z,session end — handoff written; Sections 1+6 committed/pushed (a11e713); next up Section 2 (shared build-engine)
