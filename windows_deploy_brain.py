@@ -85,6 +85,7 @@ import inspect
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -969,6 +970,7 @@ def link_brain_home_claude(brain, brain_dir):
 # staging path's exclude list and not the other's, and the two disagreed silently for two
 # days. One-to-one staging retires the second list; the constants stay.
 WSL_RUNTIME_REL   = ("system", "wsl_engine")    # live distro: disk/, _build/, residency_task.xml
+LINUX_RUNTIME_REL = ("system", "linux_engine")  # Linux engine artifact: images.tar, ollama_models.tar, cert/
 DEPLOY_LOGS_REL   = ("system", "deploy_logs")   # host-side phase logs (<date>_deploy_phase*.log)
 ENGINE_EXPORT_DIR = "wsl_engine_export"         # brain ROOT; EXISTS ONLY under --export-engine
 
@@ -976,6 +978,13 @@ ENGINE_EXPORT_DIR = "wsl_engine_export"         # brain ROOT; EXISTS ONLY under 
 def wsl_runtime_dir(brain_dir):
     """<brain>/system/wsl_engine — the live WSL distro workspace."""
     return Path(brain_dir).joinpath(*WSL_RUNTIME_REL)
+
+
+def linux_engine_dir(brain_dir):
+    """<brain>/system/linux_engine — the Linux engine artifact (NOTE 001-7): the `docker save`
+    image bundle (images.tar), the seeded ollama-volume tar (ollama_models.tar), and the baked
+    gateway cert (cert/). The native-Linux analog of the single wsl_engine/<brain>_engine.tar."""
+    return Path(brain_dir).joinpath(*LINUX_RUNTIME_REL)
 
 
 def deploy_logs_dir(brain_dir):
@@ -1626,13 +1635,177 @@ def _runtime_model_roster(brain_dir):
     return []
 
 
+# ---------------------------------------------------------------------------
+# Linux engine build (Section 2/3) — native analog of the WSL build_engine.
+# No distro: the build runs as the REAL brain account against its rootless docker
+# (NOTE 001-6) and snapshots into system/linux_engine/ (NOTE 001-7):
+#   images.tar         `docker save` of the pinned runtime images + built neuron images
+#   ollama_models.tar  tar of the <brain>_ollama_models volume (the model seed — NET-NEW)
+#   cert/{cert.pem,cert.key}   the no-arg gen-cert bake (fixes the linux:576 posture bug)
+# The brain produces each tar in its OWN home (guaranteed writable), then root relocates it
+# into linux_engine/. Windows keeps the wsl --export path unchanged. Live-validated at Section 8.
+# ---------------------------------------------------------------------------
+
+# rootless-docker env for a brain-context shell (robust regardless of ~/.bashrc seeding)
+_BRAIN_DOCKER_ENV = ('export XDG_RUNTIME_DIR="/run/user/$(id -u)"; '
+                     'export DOCKER_HOST="unix://${XDG_RUNTIME_DIR}/docker.sock"; ')
+
+
+def _brain_docker(brain, dcmd, *, check=True):
+    """Run a `docker …` command as the brain with the rootless env exported."""
+    return run(run_as_brain_argv(None, brain, _BRAIN_DOCKER_ENV + dcmd), check=check)
+
+
+def _brain_docker_out(brain, dcmd):
+    """Run a `docker …` command as the brain, returning (rc, out, err)."""
+    return run_out(run_as_brain_argv(None, brain, _BRAIN_DOCKER_ENV + dcmd))
+
+
+def _linux_docker_ready(brain):
+    rc, _, _ = _brain_docker_out(brain, "docker info")
+    return rc == 0
+
+
+def _ensure_linux_build_runtime(args):
+    """Ensure the brain account + its rootless docker daemon are up so the build can pull.
+    v1 REQUIRES the account to pre-exist (Linux create-brain is Section 4, NOTE 001-6); it brings
+    up the rootless daemon if create-brain set subuid/subgid + linger but docker is not running."""
+    brain = args.brain
+    if not user_exists(brain):
+        die(f"brain account '{brain}' does not exist. Linux build-engine (v1) requires the brain "
+            f"account to pre-exist — run create-brain first (Linux create-brain lands in Section 4, "
+            f"NOTE 001-6).")
+    if _linux_docker_ready(brain):
+        ok(f"brain rootless docker ready ({brain})")
+        return
+    info("brain rootless docker not up — installing (dockerd-rootless-setuptool) …")
+    setup = (_BRAIN_DOCKER_ENV +
+             "dockerd-rootless-setuptool.sh install && systemctl --user enable --now docker")
+    rc = run(run_as_brain_argv(None, brain, setup), check=False).returncode
+    if rc != 0 or not _linux_docker_ready(brain):
+        die(f"could not bring up the brain's rootless docker daemon for {brain} — build cannot pull.")
+    ok(f"brain rootless docker installed + running ({brain})")
+
+
+def _relocate_as_root(src, dst):
+    """Move a brain-produced artifact (readable by root) into the engine dir as root."""
+    run(["mkdir", "-p", str(Path(dst).parent)], check=True)
+    run(["mv", "-f", str(src), str(dst)], check=True)
+
+
+def _build_engine_linux(args):
+    """From-scratch Linux engine build → system/linux_engine/{images.tar,ollama_models.tar,cert/}.
+
+    Native analog of the WSL build_engine (NOTE 001-6/7). Runs as the real brain account against
+    its rootless docker; fail-loud, idempotent (overwrites a stale artifact). Live-validated at
+    Section 8 (dev_brain rebuild). The Windows wsl --export path is untouched."""
+    brain   = args.brain
+    posture = getattr(args, "posture", None) or "personal"
+    dry     = getattr(args, "dry_run", False)
+    _, brain_dir = brain_paths(args)
+    eng_dir  = linux_engine_dir(brain_dir)
+    image_refs   = _runtime_image_refs(brain_dir)
+    model_roster = _runtime_model_roster(brain_dir)
+    in_ctx  = brain_dir / "system" / "common_neuron_platform" / "input"
+    act_ctx = brain_dir / "system" / "common_neuron_platform" / "action"
+    have_neuron = (in_ctx / "Dockerfile").is_file() and (act_ctx / "Dockerfile").is_file()
+    vol = f"{brain}_ollama_models"   # MUST match compose ${BRAIN_NAME}_ollama_models
+    home = f"/home/{brain}"
+
+    banner(f"Build Linux engine: {brain}  (posture={posture}, artifact={eng_dir})")
+    total = 6
+
+    # 1. Ensure the brain runtime (account + rootless docker) so we can pull.
+    stage(1, total, "Ensure brain rootless-docker runtime")
+    if dry:
+        info("--dry-run: would ensure account + rootless docker, pull, seed, build, snapshot")
+        return
+    _ensure_linux_build_runtime(args)
+    run(["mkdir", "-p", str(eng_dir)], check=True)
+
+    # 2. Prefetch runtime images (analog of prefetch_images.sh).
+    stage(2, total, f"Pull {len(image_refs)} runtime images")
+    for ref in image_refs:
+        _brain_docker(brain, f"docker pull {shlex.quote(ref)}")
+    ok(f"pulled: {', '.join(image_refs)}")
+
+    # 3. Seed ollama models into the named volume (analog of prefetch_models.sh) — NET-NEW on Linux.
+    stage(3, total, f"Seed {len(model_roster)} ollama model(s) into {vol}")
+    if model_roster:
+        seed = f"brain-build-ollama-seed-{brain}"
+        ollama_ref = next((r for r in image_refs if r.startswith("ollama/ollama")),
+                          "ollama/ollama:latest")
+        _brain_docker(brain, f"docker volume create {shlex.quote(vol)}")
+        _brain_docker(brain, f"docker rm -f {seed}", check=False)   # drop any stale seed container
+        _brain_docker(brain, f"docker run -d --name {seed} -v {shlex.quote(vol)}:/root/.ollama "
+                             f"{shlex.quote(ollama_ref)} serve")
+        # wait for the ollama server to answer, then pull each roster model into the volume
+        _brain_docker(brain, f"for i in $(seq 1 30); do docker exec {seed} ollama list "
+                             f">/dev/null 2>&1 && break; sleep 2; done")
+        for m in model_roster:
+            _brain_docker(brain, f"docker exec {seed} ollama pull {shlex.quote(m)}")
+        _brain_docker(brain, f"docker rm -f {seed}", check=False)
+        ok(f"seeded models: {', '.join(model_roster)}")
+    else:
+        info("no models in brain_etc/ollama/models — skipping model seed")
+
+    # 4. Build neuron images if source is present (analog of prefetch_neurons.sh).
+    stage(4, total, "Build neuron images")
+    neuron_imgs = []
+    if have_neuron:
+        for tag, ctx in ((f"{brain}-input_neurons", in_ctx), (f"{brain}-action_neurons", act_ctx)):
+            _brain_docker(brain, f"docker build --pull -t {tag} {shlex.quote(str(ctx))}")
+            neuron_imgs.append(tag)
+        ok(f"built neuron images: {', '.join(neuron_imgs)}")
+    else:
+        info("no neuron Dockerfiles under system/common_neuron_platform/{input,action} — skipping")
+
+    # 5. Bake the gateway TLS cert (no-arg gen-cert → personal SAN). FIXES the linux:576 posture bug
+    #    (posture was passed as a bogus SAN). server-posture typed SANs: Section 4/6.
+    stage(5, total, "Bake gateway TLS cert")
+    gen = brain_dir / "system" / "brain_bin" / "gateway" / "gen-cert.sh"
+    if not gen.is_file():
+        die(f"gen-cert.sh not staged at {gen} — cannot bake the gateway cert.")
+    # gen-cert writes ${HOME}/gateway/gateway_out/{cert.pem,cert.key}; run it as the brain, no args.
+    _brain_docker(brain, f"bash {shlex.quote(str(gen))}")
+    cert_src = f"{home}/gateway/gateway_out"
+    run(["mkdir", "-p", str(eng_dir / "cert")], check=True)
+    for leaf in ("cert.pem", "cert.key"):
+        run(["cp", "-f", f"{cert_src}/{leaf}", str(eng_dir / "cert" / leaf)], check=True)
+    ok(f"cert baked → {eng_dir / 'cert'}")
+
+    # 6. Snapshot: docker save images + tar the ollama volume + the cert already copied.
+    stage(6, total, "Snapshot engine artifact")
+    save_refs = " ".join(shlex.quote(r) for r in (image_refs + neuron_imgs))
+    _brain_docker(brain, f"docker save -o {home}/images.tar {save_refs}")
+    _relocate_as_root(f"{home}/images.tar", eng_dir / "images.tar")
+    if model_roster:
+        rc, mp, e = _brain_docker_out(brain,
+            f"docker volume inspect -f '{{{{ .Mountpoint }}}}' {shlex.quote(vol)}")
+        mp = (mp or "").strip()
+        if rc != 0 or not mp:
+            die(f"could not resolve mountpoint of volume {vol} for the model tar: {e}")
+        _brain_docker(brain, f"tar -cf {home}/ollama_models.tar -C {shlex.quote(mp)} .")
+        _relocate_as_root(f"{home}/ollama_models.tar", eng_dir / "ollama_models.tar")
+        ok(f"ollama models tarred → {eng_dir / 'ollama_models.tar'}")
+    else:
+        info("no models seeded — ollama_models.tar omitted")
+    ok(f"Linux engine built: {eng_dir} "
+       f"(images.tar{', ollama_models.tar' if model_roster else ''}, cert/)")
+
+
 def build_engine(args):
     """From-scratch engine build → system/wsl_engine/<brain>_engine.tar.
 
     Idempotent + fail-loud: a leftover scratch distro is unregistered first, a stale
     workspace/tar is overwritten, and ANY provision stage's nonzero exit stops the
-    build (does not march on). See the module comment above for identity/rationale."""
+    build (does not march on). See the module comment above for identity/rationale.
+
+    On Linux there is no WSL distro to export: the build dispatches to _build_engine_linux,
+    which runs as the real brain account and snapshots into system/linux_engine/ (NOTE 001-6/7)."""
     validate_brain_name(args.brain)
+    if _IS_LINUX:
+        return _build_engine_linux(args)
     brain   = args.brain
     posture = getattr(args, "posture", None) or "personal"
     scratch = build_distro_name(brain)

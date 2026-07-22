@@ -27,10 +27,10 @@ When a whole Section reaches `VERIFIED`, move its block into
 **Status:** IN PROGRESS · Landed in `windows_deploy_brain.py`: (a) platform seam foundation — `_IS_WINDOWS`/`_IS_LINUX`, `require_supported_os()` (honest macOS refusal, wired into `main`), `require_admin()`→Linux `os.geteuid()==0`; (b) **identity-switch helper** `run_as_brain_argv(path, brain, cmd, *, wsl, root)` — Windows reproduces the staged-bridge argv byte-for-byte (asserted), Linux emits `sudo -u <brain> -H bash -lc <cmd>`, and `root=True` is REFUSED on Linux (no analog — Section 4 seam). Converted ALL pure "run-as-brain" identity sites to the helper: `_probe_gateway`, the 6 `verify()` curl/docker probes, and the neuron-compose `up`. Also landed the two remaining Section-1 platform branches: `_deliver_data_seams` now has a real Linux branch (root `cp -r` merge + `chown` directly — no drvfs dance; `run_as_brain_argv(root=True)` refused on Linux by design), and `user_exists()` branches to `id <brain>` on Linux. Compiles; helper contract asserted on both platform branches (incl. root argv byte-for-byte). **Section 1 identity work COMPLETE.** Two `run_as_brain` sites remain but are NOT identity concerns — they belong to other sections: `distro_imported_as_brain` (a WSL boot-gate = engine-host, **Section 3**) and `cmd_teardown`'s account-target WSL-verb call (**Section 7**, Linux teardown is `userdel`/`rm`). Next OS-forced concept: engine-host + snapshot (Section 2/3).
 
 ## Section 2 — Fold Linux path into trunk `build_engine`
-**Status:** NOT STARTED · **Depends:** 1, 3
+**Status:** IN PROGRESS · `build_engine()` now dispatches to `_build_engine_linux(args)` on Linux (Windows `wsl --export` path untouched). `_build_engine_linux` runs as the real brain account (NOTE 001-6) and does the 6-stage native build: ensure rootless-docker runtime → pull runtime images (`_runtime_image_refs`) → **seed ollama models into `<brain>_ollama_models`** (NET-NEW, via a throwaway seed container) → build neuron images (if Dockerfiles present) → bake cert (no-arg gen-cert, fixes BUG-001-1) → snapshot. Reuses the OS-portable `_runtime_image_refs`/`_runtime_model_roster` verbatim. Command sequence asserted via compile + stubbed-run harness; dry-run short-circuits. **Live-validated at Section 8.** Remaining: v1 requires the brain account to pre-exist (Linux create-brain = Section 4, DEBT-001-4).
 
 ## Section 3 — Linux engine artifact
-**Status:** NOT STARTED · **Resolved:** engine = `docker save` images + ollama-volume tar + config/cert bundle (NOTE 001-1, confirmed 2026-07-21)
+**Status:** IN PROGRESS · Layout landed (NOTE 001-7): `system/linux_engine/{images.tar (docker save of runtime+neuron images), ollama_models.tar (volume tar), cert/{cert.pem,cert.key}}` + `linux_engine_dir()` helper. Producer side done in `_build_engine_linux` (brain writes tars to its home, root relocates into `linux_engine/`). **Resolved:** engine = `docker save` images + ollama-volume tar + cert bundle (NOTE 001-1). Remaining: the CONSUME side — `ensure_engine`/`deploy_engine` Linux branches (`docker load` + volume restore + cert place) land with Section 4's deploy stages.
 
 ## Section 4 — Fold Linux branches into trunk `cmd_deploy`
 **Status:** NOT STARTED · **Depends:** 1, 2
@@ -82,6 +82,38 @@ Append-only, newest at the bottom. One `NOTE 001-K` per decision/update. Grep-ab
   hand-patching `linux_deploy_brain.py:576`; the fix arrives via the unified deployer.
 - Decision/Update: dev_brain remains down until Section 8 rebuilds it through `deploy_brain.py`.
   Accepted tradeoff — recorded so a fresh agent does not "helpfully" patch the old line.
+
+## NOTE 001-6 | 2026-07-22 | Linux build identity = the real brain account (v1); throwaway build-user is debt
+- Status: RESOLVED (this session)
+- ADR: none (self-contained)
+- Sections: 2, 3
+- Context: Windows `build_engine` runs in a throwaway scratch WSL distro `brain-build-<brain>` as an
+  arbitrary in-distro user, so the build never touches the real brain account and the engine tar is
+  fully portable. On native Linux there is no distro; rootless docker is inherently per-uid (needs a
+  real user, `/run/user/<uid>`, subuid/subgid, linger). A throwaway build USER would mirror Windows but
+  needs its own subuid/linger/rootless-setuptool + teardown — significant fragile machinery.
+- Decision/Update: v1 builds the Linux engine **as the real brain account** (reusing the rootless-docker
+  setup `linux_deploy_brain.py:provision_runtime` already performs). The portable artifact (tars) is
+  still produced for other hosts; on the common same-host case the brain ends up warm, so `deploy` is a
+  fast path. **Divergence from Windows:** Linux `build-engine` has an account side-effect Windows' build
+  does not, and (v1) REQUIRES the brain account to pre-exist — Linux `create-brain` lands in Section 4.
+  **DEBT (DEBT-001-4):** throwaway build-user isolation to match Windows' account-independence.
+
+## NOTE 001-7 | 2026-07-22 | Linux engine artifact layout = system/linux_engine/{images.tar, ollama_models.tar, cert/}
+- Status: RESOLVED (this session)
+- ADR: none (self-contained)
+- Sections: 3, 4
+- Context: Windows engine = one `wsl --export` rootfs tar at `system/wsl_engine/<brain>_engine.tar`. Linux
+  has no rootfs to export; the decided artifact (NOTE 001-1) is `docker save` images + ollama-volume tar
+  + cert/config bundle. Needs a concrete on-disk layout + naming helper analogous to `wsl_runtime_dir`.
+- Decision/Update: `LINUX_RUNTIME_REL = ("system","linux_engine")`, `linux_engine_dir(brain_dir)` =
+  `<brain>/system/linux_engine/`, holding: `images.tar` (`docker save` of the pinned image refs +
+  built neuron images), `ollama_models.tar` (tar of the `<brain>_ollama_models` volume mountpoint), and
+  `cert/{cert.pem,cert.key}` (the no-arg-gen-cert bake, fixing the `linux_deploy_brain.py:576` posture
+  bug at its new home). Build/deploy split per NOTE-synthesis: BUILD = pull images + seed models + build
+  neurons + gen cert + snapshot; DEPLOY = create acct/rootless + `docker load` + volume restore + place
+  cert + render config + `compose up --pull never` (Section 4). Model seeding is NET-NEW (the Linux
+  deploy seeds no ollama models today).
 
 ## NOTE 001-5 | 2026-07-21 | Centralize OS-forced concepts behind helpers, not scattered inline `if`s
 - Status: RESOLVED (this session)

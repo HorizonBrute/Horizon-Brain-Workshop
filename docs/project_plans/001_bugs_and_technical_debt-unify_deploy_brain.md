@@ -22,10 +22,13 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    `provision_runtime:578` then prints "TLS cert generated" **without checking rc** (false-green).
    Windows calls the same script correctly with no arg (`stage4_brain.sh:99`).
 3. **Severity/priority:** HIGH — takes the whole gateway down; must be cleared before close.
-4. **Status:** FIXED in `deploy_brain.py` (Section 6: `gen_cert_argv` + `cert_stage` — no-arg
-   personal, typed-SAN-only server, posture word rejected fatally, hard rc + cert-existence check;
-   `selftest` verb green). Pure contract VERIFIED; end-to-end cert bake proven at Section 8. Old
+4. **Status:** FIXED in the trunk's Linux build (`windows_deploy_brain.py:_build_engine_linux`, Section
+   2/3): the cert is baked by running `gen-cert.sh` with **no posture arg** (personal SAN), matching the
+   Windows `stage4_brain.sh:99` call, and copied into the engine artifact `linux_engine/cert/`. The
+   command sequence is asserted (compile + stubbed-run harness); end-to-end cert bake proven at Section 8.
+   server-posture typed SANs land with the deploy-side cert placement (Section 4/6). Old
    `linux_deploy_brain.py:576` deliberately left unpatched (NOTE 001-3) — that driver is being retired.
+   (Supersedes the earlier fix in the discarded clean-room `deploy_brain.py`, per NOTE 001-4.)
 
 ## DEBT-001-1 — Linux deploy is missing the ollama_models and neuron_bundles stages
 1. **Decision/context:** `linux_deploy_brain.py cmd_deploy` (8 stages) has no `ollama_models` and no
@@ -52,3 +55,15 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    (Section 8) and adjust probes if needed.
 3. **Impact:** LOW-MEDIUM — stale probes mis-report health, not a runtime break.
 4. **Status:** OPEN → cleared at Section 8 validation.
+
+## DEBT-001-4 — Linux engine build runs as the real brain account, not an isolated build user
+1. **Decision/context:** Windows `build_engine` runs in a throwaway scratch distro, so the build never
+   touches the real brain account and the engine tar is fully portable/account-independent. The v1 Linux
+   build (`_build_engine_linux`, NOTE 001-6) runs as the **real brain account** against its rootless
+   docker — simpler (reuses `provision_runtime`'s setup) but gives Linux `build-engine` an account
+   side-effect Windows lacks, and (v1) REQUIRES the brain account to pre-exist.
+2. **Action needed:** optionally add a throwaway build user (`brain-build-<brain>`: own subuid/subgid +
+   linger + rootless daemon + teardown) to match Windows' isolation, once Linux `create-brain` (Section
+   4) exists to factor the account/rootless setup out.
+3. **Impact:** LOW — a functional artifact is produced either way; this is isolation purity + parity.
+4. **Status:** OPEN → revisit after Section 4 (Linux create-brain) lands.
