@@ -24,7 +24,7 @@ When a whole Section reaches `VERIFIED`, move its block into
 > cert rc-guard contract), not that file's code.
 
 ## Section 1 — Platform switch inside the trunk
-**Status:** NOT STARTED · Reset from the discarded `deploy_brain.py`. Prior work proved the touchpoint set (identity switch, engine host+snapshot, seam, residency, firewall) and the `sudo -u`/`run_as_brain --wsl` identity split — that knowledge carries; the code does not. Next: add runtime platform detection + inline branch scaffolding at those touchpoints in `windows_deploy_brain.py`.
+**Status:** IN PROGRESS · Platform seam foundation landed in `windows_deploy_brain.py`: `_IS_WINDOWS`/`_IS_LINUX` constants, `require_supported_os()` (honest macOS refusal, wired into `main`), and `require_admin()` generalized to Linux `os.geteuid()==0`. Compiles; Linux import path exercised on the live host. Next: centralize each OS-forced concept behind one internally-branching helper (NOTE 001-5), starting with the identity switch (`run_as_brain`, ~15 sites).
 
 ## Section 2 — Fold Linux path into trunk `build_engine`
 **Status:** NOT STARTED · **Depends:** 1, 3
@@ -82,6 +82,23 @@ Append-only, newest at the bottom. One `NOTE 001-K` per decision/update. Grep-ab
   hand-patching `linux_deploy_brain.py:576`; the fix arrives via the unified deployer.
 - Decision/Update: dev_brain remains down until Section 8 rebuilds it through `deploy_brain.py`.
   Accepted tradeoff — recorded so a fresh agent does not "helpfully" patch the old line.
+
+## NOTE 001-5 | 2026-07-21 | Centralize OS-forced concepts behind helpers, not scattered inline `if`s
+- Status: RESOLVED (this session)
+- ADR: none (self-contained)
+- Sections: 1, 2, 4
+- Context: A full touchpoint trace of the 3247-ln trunk showed the OS-forced surface is DENSER than the
+  handoff's five-item summary: the identity switch is one concept realized at ~15 `run_as_brain --wsl`
+  call sites, the WSL engine/snapshot at ~20 `wsl` calls, plus Windows-only SUBSYSTEMS with no clean
+  Linux analog — brain-profile/`.wslconfig`/registry (`ProfileList`, mirrored networking), Win32/ctypes
+  profile-handle release in teardown, PowerShell `Get-LocalUser`, Credential-Manager keyring. Putting an
+  `if _IS_LINUX` inline at each of ~40 sites would make the file a thicket and risk regressing Windows.
+- Decision/Update: realize "only OS-forced steps branch" by CENTRALIZING each OS-forced concept behind
+  ONE helper that branches internally (e.g. one `run_as_brain(...)` emitting `sudo -u <brain> -H …` on
+  Linux vs the `run_as_brain.py --wsl …` staged tool on Windows). Call sites stay unchanged; the Windows
+  path is the untouched `else`. This satisfies NOTE 001-4 (edit the trunk, keep Windows byte-for-byte)
+  while keeping the branch surface small and reviewable. Windows-only subsystems (profile/registry/Win32
+  teardown) get a single early `if _IS_LINUX: return`/skip guard, since Linux has no analog.
 
 ## NOTE 001-4 | 2026-07-21 | PIVOT — extend the Windows trunk, do not build a new file (CONFIRMED)
 - Status: RESOLVED (user-confirmed 2026-07-21, this session)

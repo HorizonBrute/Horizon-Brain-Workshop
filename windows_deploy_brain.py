@@ -93,6 +93,17 @@ import threading
 import time
 from pathlib import Path
 
+# --- Platform seam (Project 001 — consolidate onto one deploy_brain.py) --------
+# This deployer began as Windows/WSL2-only and is the TRUNK the cross-platform
+# deployer is built from. Windows behavior stays byte-for-byte: every OS-forced
+# step branches on these flags with the existing Windows path unchanged in the
+# `else`. Only the five OS-forced concepts (identity switch, engine host+snapshot,
+# seam mount, residency, firewall) — and their Windows-only support subsystems —
+# branch. Each concept is centralized behind ONE helper that branches internally
+# (see NOTE 001-5), so call sites stay unchanged rather than sprouting `if` forks.
+_IS_WINDOWS = sys.platform.startswith("win")
+_IS_LINUX = sys.platform.startswith("linux")
+
 # --- Robust console on legacy Windows code pages (never crash on non-ASCII) ---
 for _s in (sys.stdout, sys.stderr):
     try:
@@ -321,7 +332,21 @@ def _probe_gateway(run_as_brain, brain, curl_cmd, want, timeout=30, interval=3):
 # Environment / identity
 # ---------------------------------------------------------------------------
 
+def require_supported_os():
+    """Fail closed on an unsupported OS with the same honest message brain_doctor uses.
+    Windows and Linux are supported; macOS is not yet implemented."""
+    if not (_IS_WINDOWS or _IS_LINUX):
+        die(f"{Path(__file__).name} supports Windows and Linux only; detected "
+            f"sys.platform={sys.platform!r} (macOS is not yet supported).")
+
+
 def require_admin():
+    # OS-forced (privilege check). Linux: root via sudo; Windows: Administrator token.
+    if _IS_LINUX:
+        if os.geteuid() != 0:
+            die(f"{Path(__file__).name} must run as root (re-run under sudo).")
+        ok("running as root")
+        return
     try:
         is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
@@ -3229,6 +3254,7 @@ def main():
             _s.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass  # non-reconfigurable stream (already-wrapped pipe); PYTHONUTF8 still covers children
+    require_supported_os()
     args = parse_args()
     global _VERBOSE
     _VERBOSE = bool(getattr(args, "verbose", False))
