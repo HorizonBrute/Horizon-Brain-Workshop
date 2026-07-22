@@ -316,8 +316,7 @@ def _probe_gateway(run_as_brain, brain, curl_cmd, want, timeout=30, interval=3):
     attempt = 0
     while True:
         attempt += 1
-        rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", brain,
-                              "--wsl", "--", curl_cmd])
+        rc, out, e = run_out(run_as_brain_argv(run_as_brain, brain, curl_cmd))
         code = _http_code(out)
         if code == want:
             if attempt > 1:
@@ -355,6 +354,41 @@ def require_admin():
         die(f"{Path(__file__).name} must run elevated (Administrator).\n"
             "    Launch an elevated console and re-run.")
     ok("running elevated")
+
+
+def run_as_brain_argv(run_as_brain, brain, cmd, *, wsl=True, root=False):
+    """OS-forced IDENTITY SWITCH (NOTE 001-5): build the argv that runs `cmd` as the brain.
+
+    Windows — reproduces today's staged-bridge call byte-for-byte: pipe `cmd` through the
+    per-brain `run_as_brain.py`, which enters the `brain-<brain>` WSL distro (or the brain's
+    Windows account when wsl=False) and space-joins the post-`--` args into one `bash -lc`.
+    `cmd` may be a single command string (the usual case) or a pre-split token list.
+
+    Linux — there is no distro; the brain's rootless Docker runs directly as the brain user, so
+    the switch is `sudo -u <brain> -H bash -lc <cmd>`. The `-H` + login shell are load-bearing:
+    they resolve the rootless-Docker env (DOCKER_HOST / XDG_RUNTIME_DIR). Unlike the Windows
+    bridge, sudo glues no identity banner onto stdout — but the shared `_http_code` leading-digit
+    parse already tolerates both, so capture sites need no change. `cmd` is joined to one string.
+
+    root=True (run as ROOT in the brain runtime — Windows data-seam mount/umount/chown) has NO
+    'run as brain' analog on Linux: that work is a systemd .mount + direct root chown done by the
+    already-root deployer (Section 4 seam). So on Linux this REFUSES root=True rather than
+    fabricate an argv — the caller must branch to the seam mechanism, not this identity switch."""
+    if _IS_LINUX:
+        if root:
+            raise RuntimeError(
+                "run_as_brain_argv(root=True) has no Linux analog — Linux root seam ops use a "
+                "systemd .mount + direct chown (Section 4), not an identity switch into a runtime.")
+        payload = cmd if isinstance(cmd, str) else " ".join(cmd)
+        return ["sudo", "-u", brain, "-H", "bash", "-lc", payload]
+    argv = [sys.executable, str(run_as_brain), "--brain", brain]
+    if wsl:
+        argv.append("--wsl")
+    if root:
+        argv.append("--root")
+    argv.append("--")
+    argv.extend([cmd] if isinstance(cmd, str) else list(cmd))
+    return argv
 
 
 def validate_brain_name(name):
@@ -2338,8 +2372,7 @@ def verify(args):
     #     excluded by NAME, not by scope.
     #   * a default route — an address with no way off the link is still not reachability.
     addr_cmd = "ip -o -4 addr show scope global"
-    rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                          "--wsl", "--", addr_cmd])
+    rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, addr_cmd))
     # run_as_brain glues its identity banner onto the same stdout stream (see _http_code) — drop it
     # before parsing, or the banner line itself parses as a bogus interface.
     nics = []
@@ -2359,8 +2392,7 @@ def verify(args):
             "    This host requires networkingMode=mirrored at the BRAIN account's real\n"
             "    %UserProfile%\\.wslconfig; confirm it is set there, then `wsl --shutdown` and\n"
             f"    re-boot the distro so the VM comes up with a link.{(' rc=' + str(rc)) if rc else ''}\n{e}")
-    rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                          "--wsl", "--", "ip route"])
+    rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, "ip route"))
     routes = out or ""
     if "default via" not in routes:
         die(f"VERIFY FAILED — the distro has a NIC ({', '.join(nics)}) but NO default route: "
@@ -2402,8 +2434,7 @@ def verify(args):
 
         # Mode C: a NO-TOKEN request MUST be refused (403). Readiness is already proven, so this is a
         # SINGLE shot — no poll, no 403 burst, no self-ban.
-        rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                              "--wsl", "--", hb_notoken])
+        rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, hb_notoken))
         code = _http_code(out)
         if code != "403":
             die(f"VERIFY FAILED — no-token heartbeat expected 403 (mode C gate closed), got '{code}' "
@@ -2421,8 +2452,7 @@ def verify(args):
 
     reset = (f"curl -s -o /dev/null -w '%{{http_code}}\\n' --cacert ~/gateway/gateway_out/cert.pem "
              f"-X POST https://127.0.0.1:{port}/api/v2/reset")
-    rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                          "--wsl", "--", reset])
+    rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, reset))
     code = _http_code(out)
     if code != "403":
         warn(f"reset endpoint returned '{code}', expected 403 (write-sealed). "
@@ -2434,8 +2464,7 @@ def verify(args):
     # A single chroma TLS heartbeat does not prove ollama or the neuron bundles are up. Assert
     # the whole path-router stack is running (by container), not just the one route above.
     ps = "docker ps --format '{{.Names}}'"
-    rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                          "--wsl", "--", ps])
+    rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, ps))
     names = out or ""
     def _up(needle): return needle in names
     b = args.brain
@@ -2466,8 +2495,7 @@ def verify(args):
     # jobs that exit 0 when their work is done; only the API action neuron is long-running.
     # Exited(0) is SUCCESS. A NON-ZERO exit never is, so it is fatal.
     psa = "docker ps -a --format '{{.Names}}|{{.Status}}'"
-    rc, out, e = run_out([sys.executable, str(run_as_brain), "--brain", args.brain,
-                          "--wsl", "--", psa])
+    rc, out, e = run_out(run_as_brain_argv(run_as_brain, args.brain, psa))
     rows = [l.strip() for l in (out or "").splitlines() if "|" in l]
     neurons = [r for r in rows
                if r.split("|", 1)[0].startswith(f"{b}-") and "neuron" in r.split("|", 1)[0]]
