@@ -1,7 +1,7 @@
 ---
 type: project_plan
 title: "Project 001 — Unify the brain deployer (Plan Detail)"
-description: Replace the two platform deployers with a single deploy_brain.py on a shared build-an-engine → deploy → verify lifecycle; only a thin platform backend differs.
+description: Fold Linux parity INTO the working windows_deploy_brain.py, branching only at OS-forced steps, then rename that consolidated trunk to deploy_brain.py; retire linux_deploy_brain.py.
 tags: [project-plan, deployer, cross-platform, build-engine]
 timestamp: 2026-07-21
 status: draft
@@ -9,23 +9,32 @@ status: draft
 
 # Project 001 — Unify the brain deployer
 
+> **PIVOT (2026-07-21, NOTE 001-4).** This plan previously called for a clean-room `deploy_brain.py`
+> with a `PlatformBackend` ABC re-implementing the deploy lifecycle. **That architecture is rejected.**
+> The user's directive: take the **already-working `windows_deploy_brain.py`** as the trunk, fold
+> **Linux parity into it** (branch inline only where a step is OS-forced), and **rename the consolidated
+> file to `deploy_brain.py`** once done. The rejected foundation file (`deploy_brain.py`, Sections 1+6)
+> is discarded; its one good idea — the no-false-green cert guard — is applied when folding Linux in.
+
 ## Headline
-Collapse `windows_deploy_brain.py` (3247 ln) and `linux_deploy_brain.py` (1103 ln) into one
-`deploy_brain.py` whose build/deploy/verify process is shared, with a thin platform backend for only
-the genuinely OS-forced steps.
+Take `windows_deploy_brain.py` (3247 ln, works end-to-end) as the trunk, fold `linux_deploy_brain.py`'s
+Linux-specific realizations INTO it as inline branches at the OS-forced steps, then rename the trunk to
+`deploy_brain.py` and retire `linux_deploy_brain.py`.
 
 ## Executive summary
-The two deployers duplicate ~90% of the provisioning process; the divergence that took down the live
-`dev_brain` — the Linux gateway TLS cert was never generated — is a **gratuitous transcription bug**,
+`windows_deploy_brain.py` already runs the correct build→deploy→verify process end-to-end. The Linux
+driver diverged and broke — the gateway TLS cert was never generated, a **gratuitous transcription bug**,
 not an OS constraint: `linux_deploy_brain.py:576` calls `gen-cert.sh personal`, but that script reads
-positional args as SubjectAltName entries, so openssl rejects the SAN, `set -euo pipefail` aborts
-before writing `cert.pem`, and the un-checked return code is reported as success (a false-green).
-Windows runs the identical script correctly (no arg, at build time) and works end-to-end. The fix is
-to stop maintaining two flows: adopt the **Windows-derived build-an-engine lifecycle** as the one
-canonical process — a shared orchestrator sequences OS-agnostic stages and calls a platform backend
-only for OS-forced steps (engine host + snapshot, identity switch, seam mount, residency, firewall).
-Linux gains a build step it lacks today. **Load-bearing sequencing:** the cert is baked at BUILD time
-via a no-arg `gen-cert.sh` with an rc check, so the false-green class cannot recur.
+positional args as SubjectAltName entries, so openssl rejects the SAN, `set -euo pipefail` aborts before
+writing `cert.pem`, and the un-checked return code is reported as success (a false-green). The Windows
+trunk runs the identical script correctly (no arg, at build time). So we **stop maintaining two flows**:
+keep the Windows script as the single spine and add Linux behavior *inside it* — where a step is
+OS-forced (identity switch, engine host + snapshot, seam mount, residency, firewall) we branch on the
+platform right there; everything else stays exactly as the Windows script already has it. Linux gains a
+build step it lacks today (Section 3 decides the Linux engine artifact). The Linux realizations to fold
+in already exist and are traced in `linux_deploy_brain.py` — this is a **merge into the trunk**, not a
+rewrite. **Load-bearing sequencing:** the cert is baked at BUILD time via a no-arg `gen-cert.sh` with an
+rc check (already correct on the Windows path), so the false-green class cannot recur.
 
 ## Dependencies
 1. **Upstream (this project depends on):** none.
@@ -90,10 +99,11 @@ step it doesn't currently have."
    render, seam apply, and the verify gates are portable host-side Python/bash that Windows already
    runs correctly; Linux either mis-calls (`gen-cert.sh posture`) or omits them (no `ollama_models`,
    no `neuron_bundles`). Converging onto the Windows process is therefore subtraction, not a merge.
-2. **Only five things are genuinely OS-forced** and belong behind a backend: engine host + snapshot
-   (WSL VM + `wsl --export/--import` vs a native mechanism), identity switch (`run_as_brain --wsl`
-   vs `sudo -u`), seam mount (drvfs+ACL vs bind+POSIX), residency (schtasks vs systemd+linger),
-   firewall (Defender vs ufw). Everything else is shared.
+2. **Only five things are genuinely OS-forced** and get an inline branch in the trunk: engine host +
+   snapshot (WSL VM + `wsl --export/--import` vs a native mechanism), identity switch
+   (`run_as_brain --wsl` vs `sudo -u`), seam mount (drvfs+ACL vs bind+POSIX), residency (schtasks vs
+   systemd+linger), firewall (Defender vs ufw). Everything else stays the Windows trunk's shared code,
+   untouched.
 3. **The one real open design question is the Linux engine artifact** (§3): Linux has no distro to
    `wsl --export`. This is the only place the "build-an-engine on both" decision needs a concrete new
    mechanism rather than a port.
@@ -106,21 +116,28 @@ step it doesn't currently have."
 
 Each `### Section` is a unit of work; status tracked in `001_status-unify_deploy_brain.md`.
 
-### Section 1 — Platform backend interface (the OS-forced seam)
-- Define one `PlatformBackend` with exactly the OS-forced methods: `engine_host_create/destroy`,
-  `engine_snapshot(path)` / `engine_restore(path)`, `run_as_brain(argv)` (identity switch),
-  `seam_install(...)`, `residency_install/start(...)`, `firewall_open/close(port)`.
-- Concrete `WindowsBackend` (WSL2 + schtasks) and `LinuxBackend` (native rootless + systemd).
-- Context: generalizes the proven `brain_doctor.py` backend split. The shared orchestrator must never
-  branch on `sys.platform` outside these methods.
+### Section 1 — Platform switch inside the trunk (the OS-forced branch points)
+- Work in `windows_deploy_brain.py` directly. Add a runtime platform detection and, at each OS-forced
+  touchpoint, an inline branch (`if _IS_LINUX: … else: <existing Windows code unchanged>`). The
+  OS-forced touchpoints are exactly: identity switch (`run_as_brain --wsl` vs `sudo -u <brain> -H`),
+  engine host + snapshot (`wsl --export/--import` vs the §3 Linux artifact), seam mount (drvfs+icacls
+  RX vs bind+POSIX RO), residency (schtasks keepalive vs `systemd --user` + linger), firewall
+  (Defender vs ufw).
+- Do **not** introduce a `PlatformBackend` ABC or a second file. The Windows script's existing
+  functions ARE the shared spine; only these touchpoints branch. Keep the branch surface small and
+  co-located with the step it guards so the Windows path stays byte-for-byte what works today.
+- Context: this replaces the rejected clean-room-orchestrator design. Refuse unsupported OS with the
+  same honest macOS message `brain_doctor` uses.
 
-### Section 2 — Shared build-engine (provision stage-scripts + cert bake + prefetch)
-- One `build_engine()` that runs the 12 `provision/*.sh` stage scripts in order inside the backend's
-  engine host, bakes the cert (no-arg `gen-cert.sh`, §6), and prefetches images/models/neurons.
-- The stage scripts are already OS-portable bash/docker; only their invocation harness (which host to
-  run them in) is backend-specific.
-- Context: on Windows this runs in the throwaway `brain-build-<brain>` distro; on Linux in the
-  backend's Linux engine host (§3). Cert + images are BAKED here so deploy is offline-capable.
+### Section 2 — Fold the Linux path into the trunk's `build_engine`
+- The Windows `build_engine:1566` already runs the 12 `provision/*.sh` stage scripts in the throwaway
+  `brain-build-<brain>` distro and bakes the cert (no-arg `gen-cert.sh` at `stage4_brain.sh:99`).
+  Add a Linux branch that runs the same OS-portable stage scripts in the §3 Linux engine host and
+  produces the §3 Linux engine artifact; everything else in `build_engine` stays shared.
+- The stage scripts are already OS-portable bash/docker; only the host they run in and the snapshot
+  mechanism are OS-forced (branch there, per §1).
+- Context: Cert + images are BAKED here (same as Windows) so deploy is offline-capable. Linux gains a
+  build step it lacks today.
 
 ### Section 3 — Linux engine artifact (DESIGN-OPEN — see NOTE 001-1)
 - Decide what a Linux "engine" IS and how `engine_snapshot`/`engine_restore` realize it.
@@ -133,18 +150,23 @@ Each `### Section` is a unit of work; status tracked in `001_status-unify_deploy
   data-root (a). Confirm before building §2's Linux path.
 - Context: this is the ONLY novel mechanism; everything else is a port. See NOTE 001-1.
 
-### Section 4 — Shared deploy (import/activate → seam → gateway → models → neurons → verify)
-- One `deploy()` that: `engine_restore` (import/activate the engine), installs the seam, runs the
-  gateway stage (mint bootstrap + neuron tokens, `gateway_config` regen, seam apply, force-recreate),
-  `ollama_models sync`, `neuron_bundles up`, then `verify`.
-- Context: this is Windows `cmd_deploy` stages 5–10 made backend-driven. Tokens/rendered-config stay
-  DEPLOY-time (host seam), never baked, or the residency seam-sync reverts them.
+### Section 4 — Fold Linux branches into the trunk's `cmd_deploy` stages
+- The Windows `cmd_deploy:2504` already sequences the 10 deploy stages (ensure_engine → deploy_engine
+  → seam:1859 → gateway:2174 → ollama_models:2254 → neuron_bundles:2083 → verify:2292). Add the
+  Linux realization at each OS-forced stage only: `deploy_engine` (restore the §3 artifact vs
+  `wsl --import`), `seam` (bind+POSIX RO at `/opt/brain_truths` via `opt-brain_truths.mount` vs
+  drvfs+icacls), and the residency+firewall steps (systemd user unit + linger + ufw vs schtasks +
+  Defender). Gateway/models/neurons/verify are host-side Python and stay shared.
+- Context: this is the merge of `linux_deploy_brain.py`'s `provision_runtime`/`seam`/`residency`/
+  `verify` realizations INTO the Windows stages. Tokens/rendered-config stay DEPLOY-time (host seam),
+  never baked, or the residency seam-sync reverts them. Apply the §6 rc-checked cert contract here.
 
-### Section 5 — Unified CLI + entry point
-- One argparse surface: `build-engine | deploy | teardown | verify | status`, `--brain`,
-  `--posture`, `--port`, `--install-root`, `--skip-*`. Platform detected at runtime; refuse
-  unsupported OS with the same honest macOS message `brain_doctor` uses.
-- Context: preserve every flag both drivers expose so no caller breaks.
+### Section 5 — CLI parity on the trunk's argparse
+- Keep the Windows script's existing argparse surface as the base; ensure every flag `linux_deploy_brain.py`
+  exposes is present (verbs `build-engine | deploy | teardown | verify | status`, `--brain`,
+  `--posture`, `--port`, `--install-root`, `--skip-*`). Platform detected at runtime.
+- Context: preserve every flag both drivers expose so no caller breaks. The Windows CLI is already the
+  superset for most; reconcile any Linux-only flag names.
 
 ### Section 6 — gen-cert hardening (the bug that started this)
 - Shared cert stage calls `gen-cert.sh` with NO posture arg (personal SAN); for `server` posture map
@@ -152,10 +174,14 @@ Each `### Section` is a unit of work; status tracked in `001_status-unify_deploy
   is fatal, not a warning.**
 - Context: closes BUG-001-1 permanently and enforces the no-false-green invariant at its origin.
 
-### Section 7 — Migrate, retire, document
-- Replace both drivers with `deploy_brain.py`; leave thin shims (or a deprecation error) at the old
-  names for one release. Retarget `brain_doctor.py` if any probe assumed a driver-specific artifact.
-- Update `README.md` / `docs/` and `aios/install/*` context pointer to name the one deployer.
+### Section 7 — Rename the trunk, retire the Linux driver, document
+- Once Linux parity is folded in and validated (§8), **rename** the consolidated
+  `windows_deploy_brain.py` → `deploy_brain.py` (`git mv`). Delete `linux_deploy_brain.py`; leave a thin
+  shim or deprecation error at both old names for one release. Retarget `brain_doctor.py` if any probe
+  assumed a driver-specific artifact.
+- Delete the rejected clean-room `deploy_brain.py` foundation BEFORE the rename so the target name is
+  free (its only good idea, the cert rc-guard, is carried by §6). Update `README.md` / `docs/` and
+  `aios/install/*` context pointers to name the one deployer.
 - Context: the package installer and README currently name both `windows_deploy_brain.py` /
   `linux_deploy_brain.py`; keep them consistent (AIOS consistency-check discipline).
 
@@ -168,7 +194,10 @@ Each `### Section` is a unit of work; status tracked in `001_status-unify_deploy
 ## Cross-cutting invariants (do not violate)
 - **No false-greens.** Every side-effecting sub-step checks its return code; success is never printed
   unconditionally. (This bug's root cause.)
-- **Only OS-forced steps branch.** Anything not in the `PlatformBackend` method set is shared code.
+- **Only OS-forced steps branch.** Anything outside the five OS-forced touchpoints stays the Windows
+  trunk's shared code — no parallel re-implementation, no ABC.
+- **The Windows path stays what works today.** Every branch is `if _IS_LINUX: … else: <unchanged>`;
+  the `else` is the existing Windows code, byte-for-byte, so consolidation never regresses Windows.
 - **Idempotent + re-runnable.** Every stage may run twice without harm (both drivers already aim for
   this).
 - **Posture parity.** Linux and Windows must reach the same mode-C verify posture from the same

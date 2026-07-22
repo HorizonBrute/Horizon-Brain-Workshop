@@ -18,23 +18,28 @@ When a whole Section reaches `VERIFIED`, move its block into
 
 ---
 
-## Section 1 — Platform backend interface
-**Status:** DONE (`deploy_brain.py`) — `PlatformBackend` ABC + `LinuxBackend`/`WindowsBackend`. Implemented now: privilege, `account_exists`, identity switch (`brain_exec`: `sudo -u` / `run_as_brain --wsl`), `engine_exec` (Linux), `residency_status`, OS dispatch. Engine/seam/residency/firewall are honest `NotImplementedError` stubs tagged to their sections. `status` + `selftest` verbs live; compiles; `status` ran live against dev_brain.
+> **PIVOT (NOTE 001-4):** the plan now extends `windows_deploy_brain.py` in place. The prior
+> "DONE" work lived in a clean-room `deploy_brain.py` that is being **discarded** — those sections are
+> reset to the trunk framing. What survives is the *knowledge* (the OS-forced touchpoint list and the
+> cert rc-guard contract), not that file's code.
 
-## Section 2 — Shared build-engine
+## Section 1 — Platform switch inside the trunk
+**Status:** NOT STARTED · Reset from the discarded `deploy_brain.py`. Prior work proved the touchpoint set (identity switch, engine host+snapshot, seam, residency, firewall) and the `sudo -u`/`run_as_brain --wsl` identity split — that knowledge carries; the code does not. Next: add runtime platform detection + inline branch scaffolding at those touchpoints in `windows_deploy_brain.py`.
+
+## Section 2 — Fold Linux path into trunk `build_engine`
 **Status:** NOT STARTED · **Depends:** 1, 3
 
 ## Section 3 — Linux engine artifact
 **Status:** NOT STARTED · **Resolved:** engine = `docker save` images + ollama-volume tar + config/cert bundle (NOTE 001-1, confirmed 2026-07-21)
 
-## Section 4 — Shared deploy
+## Section 4 — Fold Linux branches into trunk `cmd_deploy`
 **Status:** NOT STARTED · **Depends:** 1, 2
 
-## Section 5 — Unified CLI + entry point
+## Section 5 — CLI parity on the trunk
 **Status:** NOT STARTED · **Depends:** 4
 
 ## Section 6 — gen-cert hardening (BUG-001-1)
-**Status:** DONE (`deploy_brain.py`: `gen_cert_argv` + `cert_stage`) — no-arg gen-cert for personal, typed SAN only for server, the posture word rejected fatally, and a hard rc-check + cert-file existence check (no false-green). `selftest` verb proves the contract green. **VERIFIED** for the pure arg contract; end-to-end cert bake in a live engine is proven at Section 8 (needs Section 2's `engine_exec`).
+**Status:** OPEN (contract carries from discarded `deploy_brain.py`) — the no-false-green cert contract (no-arg gen-cert for personal, typed SAN only for server, posture word rejected fatally, hard rc + cert-existence check) is REKNOWN, not RE-landed: the Windows trunk already calls no-arg `gen-cert.sh` correctly at `stage4_brain.sh:99`. This section now = ensure the folded-in Linux cert path uses that same correct call with an rc check. VERIFIED end-to-end at Section 8.
 
 ## Section 7 — Migrate, retire, document
 **Status:** NOT STARTED · **Depends:** 5
@@ -77,3 +82,18 @@ Append-only, newest at the bottom. One `NOTE 001-K` per decision/update. Grep-ab
   hand-patching `linux_deploy_brain.py:576`; the fix arrives via the unified deployer.
 - Decision/Update: dev_brain remains down until Section 8 rebuilds it through `deploy_brain.py`.
   Accepted tradeoff — recorded so a fresh agent does not "helpfully" patch the old line.
+
+## NOTE 001-4 | 2026-07-21 | PIVOT — extend the Windows trunk, do not build a new file (CONFIRMED)
+- Status: RESOLVED (user-confirmed 2026-07-21, this session)
+- ADR: none (self-contained)
+- Sections: ALL (re-frames the whole plan)
+- Context: The prior architecture built a clean-room `deploy_brain.py` with a `PlatformBackend` ABC that
+  re-implemented the deploy lifecycle (Sections 1+6 landed as `a11e713`, Section 2 as origin `13e8467`).
+  The user rejected this end-of-last-session: the working `windows_deploy_brain.py` should be the trunk,
+  Linux parity folded INTO it, not re-implemented alongside it.
+- Decision/Update: (1) Base everything on `windows_deploy_brain.py`; branch inline only at the five
+  OS-forced touchpoints; the Windows path stays byte-for-byte what works. (2) **Rename** the consolidated
+  trunk to `deploy_brain.py` at Section 7 (`git mv`), after validation. (3) **Discard** the rejected
+  clean-room `deploy_brain.py` (its cert rc-guard idea is carried by Section 6). (4) Retire
+  `linux_deploy_brain.py` once its Linux realizations are folded in. Origin was reverted to baseline
+  `30abc35` (force-push) and the stray `13e8467` dropped. All plan docs re-scoped to this framing.

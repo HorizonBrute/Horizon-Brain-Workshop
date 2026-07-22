@@ -12,29 +12,33 @@ status: draft
 > Read this instead of a handoff to resume Project 001 cold. Short by design.
 
 ## What this project is
-Replace the two platform brain deployers (`windows_deploy_brain.py`, `linux_deploy_brain.py`) with a
-single `deploy_brain.py`. One shared build→deploy→verify process; a thin `PlatformBackend` handles
-only the OS-forced steps. Full detail: `001_detail-unify_deploy_brain.md`.
+Fold Linux parity INTO the already-working `windows_deploy_brain.py` (branch inline only at OS-forced
+steps), then rename that consolidated trunk to `deploy_brain.py` and retire `linux_deploy_brain.py`.
+One shared build→deploy→verify spine (the Windows script's), with an `if _IS_LINUX` branch only at the
+five OS-forced touchpoints. Full detail: `001_detail-unify_deploy_brain.md`. **Read NOTE 001-4 first.**
 
 ## The one thing to understand first
 The Windows deployer already runs the correct process end-to-end; the Linux one diverged and broke
-(gateway TLS cert never generated — a false-green from a bad `gen-cert.sh` call). So unification is
-**subtraction toward the Windows process**, not a merge of two half-different flows. Only five things
-are genuinely OS-forced (engine host+snapshot, identity switch, seam mount, residency, firewall);
-everything else is shared. See NOTE 001-1 for the one real open design question.
+(gateway TLS cert never generated — a false-green from a bad `gen-cert.sh` call). So this is a **merge
+into the Windows trunk**, not a rewrite and not a new file. **PIVOT (NOTE 001-4):** the earlier
+clean-room `deploy_brain.py` + `PlatformBackend` ABC is REJECTED and discarded — we edit
+`windows_deploy_brain.py` in place. Only five things are genuinely OS-forced (engine host+snapshot,
+identity switch, seam mount, residency, firewall); everything else stays the Windows trunk untouched.
 
 ## Where the project stands
-**Sections 1 & 6 have landed** in `deploy_brain.py`: the `PlatformBackend` interface + Linux/Windows
-backends foundation (identity switch, account probes, naming, OS dispatch; engine/seam/residency/
-firewall are section-tagged stubs), and the shared TLS-cert stage done right (no-arg gen-cert, typed
-SAN only for server, the posture word rejected fatally, hard rc + cert-existence check). The
-`selftest` verb proves the cert contract green — **BUG-001-1 is closed at the contract level**.
-All design questions are resolved: the Linux engine artifact is `docker save` images + ollama-volume
-tar + config/cert bundle (NOTE 001-1, confirmed). Nothing is BLOCKED.
-Remaining code: Section 2 (shared build-engine), 3 (Linux snapshot/restore), 4 (shared deploy:
-create-account/seam/gateway/models/neurons/verify + residency/firewall), 5 (full CLI), 7 (retire the
-two old drivers + docs), 8 (rebuild dev_brain via the unified path — clears the live outage, NOTE 001-3).
-Recommended next: Section 2 → 3 → 4. Live `dev_brain` stays down by design until Section 8.
+**PIVOT just landed (NOTE 001-4).** The prior "Sections 1 & 6 done" lived in a clean-room
+`deploy_brain.py` that is now **discarded**; origin was reverted to baseline `30abc35` and the stray
+Section-2 commit `13e8467` force-pushed away. What survives is knowledge, not code: the five OS-forced
+touchpoints, the identity split (`sudo -u`/`run_as_brain --wsl`), and the no-false-green cert contract.
+All plan docs are re-scoped to "extend the trunk". Design questions resolved: the Linux engine artifact
+is `docker save` images + ollama-volume tar + config/cert bundle (NOTE 001-1). Nothing is BLOCKED.
+Remaining code, all against `windows_deploy_brain.py`: Section 1 (platform switch + branch scaffolding),
+2 (Linux path in `build_engine`), 3 (Linux snapshot/restore), 4 (Linux branches in `cmd_deploy`:
+seam/gateway/residency/firewall), 5 (CLI parity), 6 (rc-checked cert on the Linux path), 7 (rename to
+`deploy_brain.py` + retire `linux_deploy_brain.py` + delete rejected file + docs), 8 (rebuild dev_brain
+via the unified path — clears the live outage, NOTE 001-3).
+Recommended next: Section 1 (map the trunk's OS-forced touchpoints, add the switch) → 2/3 → 4.
+Live `dev_brain` stays down by design until Section 8.
 
 ## What to read, in order
 1. This file.
