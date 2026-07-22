@@ -29,6 +29,10 @@ ships into a deployed brain and that the policy `@`-pointers resolve against —
 - [default_brain_network_overview.svg](default_brain_network_overview.svg) — plain-language overview of how the default brain works: caller, documents, gateway, answer.
 - [default_brain_network_detail.svg](default_brain_network_detail.svg) — network topology detail: consumer side, gateway ports, bind posture.
 
+## Project plans
+
+- [project_plans/index.md](project_plans/index.md) — multi-session project trackers (living detail / status / orientation / action-log docs). Active: **001 — Unify the brain deployer**.
+
 ## Documentation elsewhere in the repo
 
 This `docs/` folder is the package documentation front. Other docs live **with the code they explain**;
