@@ -569,13 +569,37 @@ def provision_runtime(args):
         "cp ~/docker/.env.example ~/docker/.env 2>/dev/null || : ; "
         "grep -q '^CHROMA_MASTER_TOKEN_FOR_GW=' ~/docker/.env 2>/dev/null || "
         "echo CHROMA_MASTER_TOKEN_FOR_GW=$(openssl rand -hex 32) >> ~/docker/.env ; }")
-    # Generate the TLS cert at the gateway home (posture-aware).
+    # Generate the TLS cert at the gateway home (posture-aware). gen-cert.sh takes EXTRA SAN
+    # ENTRIES (e.g. "IP:192.168.1.5"), NOT the posture word — passing "personal"/"server" makes
+    # openssl fail ("invalid SAN value ... personal") and write NO cert, after which the gateway
+    # crash-loops on a missing /etc/nginx/certs/cert.pem. Translate the posture to SAN args:
+    # personal -> localhost-only (no extra SAN); server -> add the host's LAN IP so off-box TLS
+    # clients can verify the cert (the base SAN localhost + 127.0.0.1 is always included).
     posture = args.posture
+    san = ""
+    if posture == "server":
+        rc_ip, ip_out, _ = run_out(["bash", "-lc",
+            "ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[0-9.]+'"])
+        lan_ip = (ip_out or "").strip()
+        if lan_ip:
+            san = f"IP:{lan_ip}"
+        else:
+            warn("server posture: could not resolve a LAN IP for the cert SAN — generating a "
+                 "localhost-only cert (off-box TLS clients will not verify the host IP).")
     gencert = "system/brain_bin/gateway/gen-cert.sh"
     if (canon_gateway / "gen-cert.sh").is_file():
-        brain_sh(brain, f"cd {shell_quote(str(brain_dir))} && bash {gencert} {posture} || "
-                        f"bash {shell_quote(str(canon_gateway / 'gen-cert.sh'))} {posture}")
-    ok("gateway stack laid + TLS cert generated (~/gateway/gateway_out/cert.pem)")
+        _, out_c, e_c = brain_sh(brain,
+            f"cd {shell_quote(str(brain_dir))} && bash {gencert} {san} || "
+            f"bash {shell_quote(str(canon_gateway / 'gen-cert.sh'))} {san}")
+        # Fail LOUD: gen-cert.sh can exit 0 on a partial run, and an unwritten cert turns into an
+        # opaque nginx crash-loop three stages later. Assert the cert actually landed.
+        rc_v, _, _ = brain_sh(brain, "test -s ~/gateway/gateway_out/cert.pem "
+                                     "&& test -s ~/gateway/gateway_out/cert.key")
+        if rc_v != 0:
+            die("TLS cert generation FAILED — ~/gateway/gateway_out/{cert.pem,cert.key} missing or "
+                f"empty; the gateway cannot start without them.\n{out_c}{e_c}")
+    ok("gateway stack laid + TLS cert generated (~/gateway/gateway_out/cert.pem"
+       + (f", SAN {san}" if san else "") + ")")
 
     # 4. Do NOT bring the stack up here — mirror the Windows orchestrator, which never runs a
     #    compose command before the config+tokens are rendered. The staged compose.yaml references
