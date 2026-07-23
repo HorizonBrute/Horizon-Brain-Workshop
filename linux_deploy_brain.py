@@ -913,7 +913,15 @@ def residency(args):
 def verify(args):
     brain = args.brain
     _, brain_dir = brain_paths(args)
-    port = args.port
+    # The chroma READ surface has its OWN gateway listener on CHROMA_PORT. In the path-router
+    # model :8443 (args.port) is the ACTION-neuron surface, chroma is on :8000, ollama on :11434 —
+    # so probing chroma's /api/v2/heartbeat on args.port hits the action server block, which denies
+    # a reader token (403) even on a perfectly healthy brain (root cause of a spurious "reader-token
+    # heartbeat expected 200, got 403" on server/exposed deploys). Resolve CHROMA_PORT from the
+    # rendered runtime .env; fall back to args.port for a single-surface / older config.
+    _, cp_out, _ = brain_sh(brain,
+        "grep -m1 -oE '^CHROMA_PORT=[0-9]+' ~/docker/.env 2>/dev/null | cut -d= -f2")
+    port = (cp_out or "").strip() or args.port
 
     # Mode C: no-token → 403.
     hb_notoken = (f"curl -s -o /dev/null -w '%{{http_code}}' --cacert ~/gateway/gateway_out/cert.pem "
