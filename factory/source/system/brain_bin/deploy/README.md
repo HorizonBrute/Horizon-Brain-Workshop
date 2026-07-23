@@ -1,8 +1,7 @@
 # deploy/ - brain deployment (installer phase-split, driven by the orchestrator)
 
 > **Entry point is the orchestrator, not these scripts directly.** Run
-> `windows_deploy_brain.py deploy --brain <name>` (Windows) or
-> `linux_deploy_brain.py deploy --brain <name>` (Linux). It drives the full ADR-0015
+> `deploy_brain.py deploy --brain <name>` (Windows + Linux). It drives the full ADR-0015
 > onboarding end-to-end (below). The two installers here are the **engine-import phase
 > split** it calls; `residency.py` is the boot-keepalive it registers. `../onboard.py` is
 > **DEPRECATED** (Docker-Desktop-era host prep) — do not use it.

@@ -131,7 +131,7 @@ def write_keepalive(distro, info=lambda m: None):
 
 def xml_path(brain_dir):
     # system/wsl_engine — WSL runtime state (ADR-0019 amended). MUST match
-    # windows_deploy_brain.WSL_RUNTIME_REL and both installers.
+    # deploy_brain.WSL_RUNTIME_REL and both installers.
     return Path(brain_dir) / "system" / "wsl_engine" / "residency_task.xml"
 
 

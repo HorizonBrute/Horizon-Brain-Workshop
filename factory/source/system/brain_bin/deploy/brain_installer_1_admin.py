@@ -40,7 +40,7 @@ HERE = Path(__file__).resolve().parent              # <brain>/system/brain_bin/d
 BRAIN_DIR = HERE.parent.parent.parent                       # <brain>
 PROVISION = BRAIN_DIR / ".brain_provision.json"
 # Credential namespaces in the ONE OS-native keystore — MUST stay in sync with
-# windows_deploy_brain.py's and run_as_brain.py's _keyring_namespaces(). Order = lookup
+# deploy_brain.py's and run_as_brain.py's _keyring_namespaces(). Order = lookup
 # precedence (first hit wins). A Horizon.AIOS PLATFORM brain's create-brain
 # (horizon_aios_create_brain.py) writes the password to 'horizon_aios'/'brain_account:<brain>';
 # a STANDALONE factory create_brain.py writes 'brain:<brain>'/'account_password'. Prefer the
@@ -70,7 +70,7 @@ _CRED_HELPER = os.environ.get("BRAIN_CRED_HELPER")
 CRED = Path(_CRED_HELPER) if _CRED_HELPER else None
 PHASE2 = HERE / "brain_installer_2_brain.py"
 
-# Brain-relative RUNTIME homes. MUST match windows_deploy_brain.py's constants of the same
+# Brain-relative RUNTIME homes. MUST match deploy_brain.py's constants of the same
 # names — the 2026-07-13 `wsl` → `wsl_engine` rename changed one copy of this path and not the
 # others, which is exactly the drift these named constants exist to prevent.
 WSL_RUNTIME_REL = ("system", "wsl_engine")     # live distro: disk/, _build/, residency_task.xml

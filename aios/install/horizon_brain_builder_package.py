@@ -5,7 +5,7 @@ Horizon Brain Builder package.
 This is a SEPARATE package from the Horizon AIOS core. Unlike LAPP (which file-drops a skill), the
 brain builder is a heavy CLI deployment toolchain, so `install` does NOT copy the toolchain anywhere:
 it REGISTERS the package and injects a discovery-context pointer, and the toolchain runs IN PLACE from
-the clone (deploy a brain by running the clone's windows_/linux_deploy_brain.py). This keeps a single
+the clone (deploy a brain by running the clone's deploy_brain.py). This keeps a single
 copy of the toolchain — the clone — as the one thing to update.
 
 Cross-platform, standard-library only (Python 3.8+). Mirrors the horizon_aios_*.py tooling style but
@@ -238,7 +238,7 @@ def cmd_install(args) -> None:
           f" (clone_path={entry['clone_path']}, role={entry['role']})")
 
     print(f"Done. The builder is registered and discoverable. Deploy a brain by running the clone's\n"
-          f"      windows_deploy_brain.py / linux_deploy_brain.py in place (see the clone's README).")
+          f"      deploy_brain.py in place (see the clone's README).")
     if rel_to_root(pkg, p["root"]) == pkg.resolve().as_posix():
         print("  note: this package clone is OUTSIDE $HORIZON_ROOT; for sync coverage clone it to "
               f"$HORIZON_SYSTEM/deployed_packages/{PACKAGE_NAME}/ and re-run install.")

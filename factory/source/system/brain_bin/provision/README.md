@@ -74,6 +74,6 @@ force-recreate). So `stage4_brain.sh` intentionally builds only the base engine.
   Still TODO: collapse stages 1-9 into one idempotent installer that takes the name as a param.
 - The `wsl --export` image is the shippable artifact. `../onboard.py` is **DEPRECATED**
   (Docker-Desktop-era host prep) — the current entry point is the orchestrator
-  (`windows_deploy_brain.py` / `linux_deploy_brain.py`).
+  (`deploy_brain.py`).
 - Everything is portable to a native Linux host (rootless Docker in the brain's home, same
-  compose); `linux_deploy_brain.py` is the Linux orchestrator (static-validated, run live TBD).
+  compose); `deploy_brain.py` is the cross-platform orchestrator and drives native Linux too.

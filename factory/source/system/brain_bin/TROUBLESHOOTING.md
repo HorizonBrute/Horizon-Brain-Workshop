@@ -196,7 +196,7 @@ can't reach the RAG endpoint after a current deploy, work through both in order:
   registry-recorded `%UserProfile%`. Deploy now RESOLVES the real path before writing: `brain_profile_dir()`
   forces a `LOGON_WITH_PROFILE` logon, gets the SID via `Get-LocalUser`, and reads
   `HKLM\...\ProfileList\<SID>\ProfileImagePath`; `write_brain_wslconfig()` (called from `create_brain()` in
-  `windows_deploy_brain.py`, on both fresh-provision and redeploy paths, idempotent and non-clobbering)
+  `deploy_brain.py`, on both fresh-provision and redeploy paths, idempotent and non-clobbering)
   writes `[wsl2]` / `networkingMode=mirrored` into that RESOLVED `.wslconfig` (icacls read granted to the
   brain; surfaced as a visibility symlink at `brain_etc/wsl/.wslconfig`) before the distro's first boot.
   Confirm the file exists at the resolved profile and that mirrored actually engaged (the `0x8007054f` entry
@@ -219,11 +219,11 @@ can't reach the RAG endpoint after a current deploy, work through both in order:
 
 ## Orchestrator command gotchas (`verify` / `status` / `--install-root`)
 
-Notes for driving `windows_deploy_brain.py` from the **operator** console (not the brain's). These
+Notes for driving `deploy_brain.py` from the **operator** console (not the brain's). These
 are about the deploy tool itself, not a running stack.
 
 **`verify` or `status` hangs — banner prints, then nothing (has to be killed).**
-`python windows_deploy_brain.py verify --brain <brain> …` (or `status`) emits its banner and then
+`python deploy_brain.py verify --brain <brain> …` (or `status`) emits its banner and then
 blocks forever. **Cause:** these verbs hop into the brain's per-user distro via `run_as_brain`, which
 must resolve the brain's Windows password from the OS keystore — and that lookup only finds it when
 the platform keyring namespace is advertised via `$BRAIN_KEYRING_SERVICE`. Older builds set that seam

@@ -12,7 +12,7 @@ Audience: an IT admin (or an agent) standing up or operating a brain.
 > and no search — if neither is set, the deploy stops and tells you so.
 
 > **Scope note.** This guide covers the base-engine mechanics (WSL import, residency, backup).
-> The **normal deploy is the orchestrator** (`windows_deploy_brain.py` / `linux_deploy_brain.py`),
+> The **normal deploy is the orchestrator** (`deploy_brain.py`),
 > which drives the full end-to-end onboarding — see **§0 (end-to-end flow)** and
 > `deploy/README.md`. The current **Developer RAG stack** (chroma + ollama +
 > gateway + fail2ban on two private networks, **neuron bundles** — input (write) + action (read),
@@ -79,8 +79,8 @@ import (§3) is one stage of it; the full-contract flow (aligned with `deploy/RE
 **There is no build/repackage step anymore.** A source edit **anywhere in the factory tree**
 reaches the next `deploy` directly — both the orchestrator and the payload are now live:
 
-1. **Orchestrator — run in place.** `windows_deploy_brain.py` at the repo root (and its Linux sibling
-   `linux_deploy_brain.py`) is the installer you execute directly. Your edit to it is **LIVE on
+1. **Orchestrator — run in place.** `deploy_brain.py` at the repo root is the cross-platform
+   installer you execute directly. Your edit to it is **LIVE on
    the next `deploy`** — as it always was.
 2. **Payload — now COPIED from the source tree at deploy.** Everything under `factory/system/**`
    (e.g. `system/brain_sbin/gateway_port.py`, the keepalive, `gateway_config.py`) is staged by
@@ -348,4 +348,4 @@ the entire engine + data**. Two layers:
 The staged provisioning scripts are already the installer, and the engine artifact (the
 `.tar`) is the shippable image. The compose file and the whole model are portable to a
 native Linux host unchanged (rootless Docker in the brain's home) — see
-`linux_deploy_brain.py`.
+`deploy_brain.py`.

@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-windows_deploy_brain.py — The Brain Deploy Orchestrator (Windows / WSL2)
-===============================================================
+deploy_brain.py — The Brain Deploy Orchestrator (cross-platform: Windows/WSL2 + native Linux)
+============================================================================================
 
-One elevated entry point that sequences every brain building block into a single
+One privileged entry point that sequences every brain building block into a single
 converging deploy: bare host → account → staged code → engine → residency →
 gateway → verified TLS heartbeat. And the inverse: tear it down to rebuild any
 time.
 
 PLATFORM
-    This is the **Windows / WSL2** orchestrator — the brain engine is a per-user
-    WSL2 distro (`wsl --import` of a provisioned Debian), residency is a Windows
-    Task Scheduler boot task, and the config seam mounts via drvfs (9p). It is
-    Windows-only by construction (`wsl`, `schtasks`, `icacls`, Credential Manager).
-    The native-Linux sibling is `linux_deploy_brain.py` (systemd + rootless Docker
-    + bind-mount seam, no VM). macOS is a later objective.
+    ONE deployer for both OSes. The Windows path is the trunk; Linux parity is folded
+    in and branches only at OS-forced steps (identity switch, engine host+snapshot,
+    seam mount, residency, firewall) — everything else is shared (Project 001).
+      * Windows/WSL2 — engine = a per-user WSL2 distro (`wsl --import` of a provisioned
+        Debian), residency = a Task Scheduler boot task, seam = drvfs (9p) + icacls,
+        identity = run_as_brain.py, secrets = Credential Manager.
+      * Native Linux — engine = `docker save` images + an ollama-volume tar + baked cert
+        under system/linux_engine/ (no VM), residency = a `systemd --user` unit + linger,
+        seam = a bind,ro mount unit, identity = `sudo -u <brain> -H`, rootless Docker.
+    The runtime OS is detected (`_IS_LINUX`/`_IS_WINDOWS`); an unsupported OS is refused.
+    macOS is a later objective. (`linux_deploy_brain.py` is a retained legacy file kept
+    only for an internal importer; it is NOT the Linux deploy path — this is.)
 
 WHY THIS EXISTS
     The capability to stand up a brain is real but scattered across lanes:
@@ -64,18 +70,18 @@ INSTALL ROOT
     never guesses where your brains live and never walks up looking for one.
 
 USAGE
-    windows_deploy_brain.py deploy   --brain X --posture personal|server
+    deploy_brain.py deploy   --brain X --posture personal|server
                              [--port N] [--bind personal|server]
                              [--engine-tar <tar>]
                              [--from-scratch [--imagefile <path>] [--keep-scratch]]
                              --install-root <dir> [--skip-gateway]
-    windows_deploy_brain.py build-engine --brain X [--posture personal|server]
+    deploy_brain.py build-engine --brain X [--posture personal|server]
                              [--imagefile <path>] [--keep-scratch] [--dry-run]
-    windows_deploy_brain.py teardown --brain X [--purge --yes]
-    windows_deploy_brain.py verify   --brain X [--port N]
-    windows_deploy_brain.py status   --brain X
+    deploy_brain.py teardown --brain X [--purge --yes]
+    deploy_brain.py verify   --brain X [--port N]
+    deploy_brain.py status   --brain X
 
-Run elevated (Administrator), from an elevated console.
+Run privileged: Administrator (elevated console) on Windows, root/sudo on Linux.
 """
 
 import argparse

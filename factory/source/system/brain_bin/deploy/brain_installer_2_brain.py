@@ -33,7 +33,7 @@ HERE = Path(__file__).resolve().parent
 BRAIN_DIR = HERE.parent.parent.parent
 PROVISION = BRAIN_DIR / ".brain_provision.json"
 
-# MUST match windows_deploy_brain.py / brain_installer_1_admin.py (ADR-0019 amended).
+# MUST match deploy_brain.py / brain_installer_1_admin.py (ADR-0019 amended).
 WSL_RUNTIME_REL = ("system", "wsl_engine")
 
 # residency.py (same dir) owns the boot-keepalive script content + path. Phase 2 is the ONLY

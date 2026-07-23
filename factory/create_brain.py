@@ -1004,7 +1004,7 @@ def _link_brain_claude(ctx, dry_run=False):
         #    dir BEFORE the account's first profile-loading logon makes Windows treat the name
         #    as squatted and create the REAL profile suffixed (C:\Users\<brain>.<MACHINE>), which
         #    this link would then never match — the self-inflicted `.NNN` suffix (Phase 6 /
-        #    windows_deploy_brain.brain_profile_dir; NOTE 001-33). Link only once the real profile
+        #    deploy_brain.brain_profile_dir; NOTE 001-33). Link only once the real profile
         #    exists; the deploy orchestrator materializes it via LOGON_WITH_PROFILE and a redeploy
         #    re-runs this to (re)establish the link.
         info(f'Redirecting brain home ~/.claude -> {brain_claude_dir}')

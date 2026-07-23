@@ -11,8 +11,7 @@ onboard.py - brain onboarding (Chroma stack)   [DEPRECATED]
 * template that no longer ships — none of which the current engine uses.    *
 *                                                                          *
 * USE THE ORCHESTRATOR INSTEAD:                                            *
-*     python windows_deploy_brain.py deploy --brain <name>   (Windows)     *
-*     python linux_deploy_brain.py   deploy --brain <name>   (Linux)       *
+*     python deploy_brain.py deploy --brain <name>   (Windows + Linux)     *
 * which drives: create-brain -> stage package -> engine -> installer_1/2 -> *
 * residency -> brain-truths seam -> gateway/token -> reapply (ADR-0015     *
 * path-router stack) -> per-route verify.                                  *
@@ -350,8 +349,7 @@ def main() -> int:
         print("=" * 64)
         print("onboard.py is DEPRECATED and NOT part of the current onboarding path.")
         print("Use the orchestrator instead:")
-        print("    python windows_deploy_brain.py deploy --brain <name>   (Windows)")
-        print("    python linux_deploy_brain.py   deploy --brain <name>   (Linux)")
+        print("    python deploy_brain.py deploy --brain <name>   (Windows + Linux)")
         print("Re-run with --dryrun to inspect the old host-prep, or --force-deprecated")
         print("to run it anyway (Docker-Desktop era; expects a chroma/.env.example that")
         print("no longer ships). See system/brain_bin/DEPLOYMENT.md.")

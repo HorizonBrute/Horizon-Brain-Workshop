@@ -36,7 +36,7 @@ projects/
    `install_entrypoint`, and a `payload` manifest (the context block — the only reversible artifact).
 
 **No toolchain copy.** The builder is invoked from the clone: deploy a brain by running the clone's
-`windows_deploy_brain.py` / `linux_deploy_brain.py` in place.
+`deploy_brain.py` in place.
 
 `uninstall` deregisters and strips the context block, **leaving the clone and every deployed brain
 untouched**. `update` does `git fetch` + `reset --hard` to upstream, then re-registers. `status` prints

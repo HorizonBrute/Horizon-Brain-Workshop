@@ -45,27 +45,21 @@ throughout these docs means that directory — the one that contains `<brain>/`.
 ## The orchestrator — one entry → working brain
 Host-side tooling (NOT staged inside the per-brain instance — it runs *before* the brain
 exists and copies the code into it). It sequences every building block into one converging
-deploy and its inverse. Pick the orchestrator for the host OS:
+deploy and its inverse. One orchestrator serves both host OSes:
 
 ```
-# Windows / WSL2 (run from an elevated shell):
-python windows_deploy_brain.py deploy   --brain X --install-root DIR --posture personal|server [--port N] [--engine-tar T]
-python windows_deploy_brain.py teardown --brain X [--purge --yes]
-python windows_deploy_brain.py verify   --brain X
-python windows_deploy_brain.py status   --brain X
-
-# Native Linux (run with sudo):
-sudo python3 linux_deploy_brain.py deploy   --brain X --install-root DIR --posture personal|server [--port N]
-sudo python3 linux_deploy_brain.py teardown --brain X [--purge --yes]
-sudo python3 linux_deploy_brain.py verify   --brain X
-sudo python3 linux_deploy_brain.py status   --brain X
+# Cross-platform — run from an elevated shell (Windows/WSL2) or with sudo (native Linux):
+python deploy_brain.py deploy   --brain X --install-root DIR --posture personal|server [--port N] [--engine-tar T]
+python deploy_brain.py teardown --brain X [--purge --yes]
+python deploy_brain.py verify   --brain X
+python deploy_brain.py status   --brain X
 ```
 
-The two share the same verbs, vocabulary, and portable building blocks (the staged-from-source
+Both host OSes share the same verbs, vocabulary, and portable building blocks (the staged-from-source
 code, the gateway compose stack, `run_as_brain`, the seam concept, the bootstrap-token mint).
 They differ only where the OS forces it: **engine** (WSL distro tar vs native rootless-Docker
 home), **residency** (Task Scheduler boot task vs systemd + linger), **seam mount** (drvfs 9p +
-`icacls` vs bind mount + POSIX perms). See `linux_deploy_brain.py`'s docstring for the full
+`icacls` vs bind mount + POSIX perms). See `deploy_brain.py`'s docstring for the full
 Windows↔Linux mapping.
 
 Deploy stages (each idempotent — checks "already done?" and converges):
