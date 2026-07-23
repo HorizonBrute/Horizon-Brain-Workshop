@@ -36,7 +36,11 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    or starts neuron bundles.
 2. **Action needed:** the unified `deploy()` (Section 4) must include both stages for both OSes.
 3. **Impact:** MEDIUM — a Linux brain's `/ask` 404s until models are pulled; neurons never run.
-4. **Status:** OPEN → absorbed by Section 4.
+4. **Status:** PARTIALLY CLOSED (Section 4). **Models: CLOSED** — `_build_engine_linux` seeds the ollama
+   roster into the volume at build and `_deploy_engine_linux` restores it, so a Linux brain ships with
+   its models (net-new; the old driver seeded none). **Neurons: STILL OPEN** — `_cmd_deploy_linux` builds
+   neuron images into the engine but does not yet START them (no neuron-bundle bring-up / data-seam
+   delivery stage on Linux, matching the old driver). Deferred to a follow-up neuron stage; tracked here.
 
 ## DEBT-001-2 — Several Windows engine-build steps have no Linux equivalent
 1. **Decision/context:** unattended-upgrades policy (`stage5_root.sh`), maintenance tools + timers

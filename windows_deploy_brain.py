@@ -971,6 +971,7 @@ def link_brain_home_claude(brain, brain_dir):
 # days. One-to-one staging retires the second list; the constants stay.
 WSL_RUNTIME_REL   = ("system", "wsl_engine")    # live distro: disk/, _build/, residency_task.xml
 LINUX_RUNTIME_REL = ("system", "linux_engine")  # Linux engine artifact: images.tar, ollama_models.tar, cert/
+MOUNT_POINT       = "/opt/brain_truths"          # Linux config-exposure seam (bind,ro of brain_etc)
 DEPLOY_LOGS_REL   = ("system", "deploy_logs")   # host-side phase logs (<date>_deploy_phase*.log)
 ENGINE_EXPORT_DIR = "wsl_engine_export"         # brain ROOT; EXISTS ONLY under --export-engine
 
@@ -1792,6 +1793,493 @@ def _build_engine_linux(args):
         info("no models seeded — ollama_models.tar omitted")
     ok(f"Linux engine built: {eng_dir} "
        f"(images.tar{', ollama_models.tar' if model_roster else ''}, cert/)")
+
+
+# ===========================================================================
+# Linux DEPLOY path (Section 4) — ported faithfully from the (fixed) linux_deploy_brain.py
+# and wired to the Linux engine artifact. cmd_deploy/cmd_teardown/cmd_verify/cmd_status
+# dispatch here on Linux; the Windows stage functions are untouched. Shared trunk helpers
+# reused: brain_paths, stage_package, _ensure_bootstrap_token/_read_seam_token, the token
+# model, and run/run_out. Live-validated at Section 8. (NOTE 001-4/8.)
+# ===========================================================================
+
+def _brain_sh(brain, script):
+    """Run a shell script as the brain (login shell) → (rc, out, err). Linux analog of the
+    retired linux_deploy_brain.py brain_sh — identical to run_out(run_as_brain_argv(...))."""
+    return run_out(run_as_brain_argv(None, brain, script))
+
+
+def brain_home(brain):
+    rc, out, _ = run_out(["getent", "passwd", brain])
+    if rc != 0 or not out.strip():
+        return None
+    parts = out.strip().split(":")
+    return parts[5] if len(parts) > 5 and parts[5] else f"/home/{brain}"
+
+
+def linger_enabled(brain):
+    rc, out, _ = run_out(["loginctl", "show-user", brain, "--property=Linger"])
+    return rc == 0 and "Linger=yes" in (out or "")
+
+
+def stack_service(brain):  return f"{brain}-docker-stack"
+def seam_mount_unit():     return "opt-brain_truths.mount"
+
+
+def _stage_artifact_to_brain(brain, home, src):
+    """Copy a root-owned engine artifact into the brain's home (chowned) so the brain can
+    docker-load / untar it — rootless ops must run as the brain. Returns the in-home path."""
+    dst = f"{home}/{Path(src).name}"
+    run(["cp", "-f", str(src), dst], check=True)
+    run(["chown", f"{brain}:{brain}", dst], check=True)
+    return dst
+
+
+def _preflight_linux(args):
+    require_admin()   # euid == 0 on Linux
+    if run_out(["systemctl", "--version"])[0] != 0:
+        die("systemd not found — this deployer targets a systemd Linux host.")
+    ok("systemd present")
+    if not shutil.which("docker"):
+        die("`docker` not found on PATH — install docker-ce (rootless is configured per-brain).")
+    ok("docker present")
+    if not (shutil.which("newuidmap") and shutil.which("newgidmap")):
+        die("newuidmap/newgidmap missing — install `uidmap` (rootless docker needs subuid mapping).")
+    ok("uidmap tools present")
+    for tool in ("curl", "openssl"):
+        if not shutil.which(tool):
+            die(f"`{tool}` not found — required (curl: verify gates; openssl: cert gen). Install it.")
+    ok("curl + openssl present")
+    ok("preflight passed")
+
+
+def _create_brain_linux(args):
+    brain = args.brain
+    if user_exists(brain):
+        ok(f'account "{brain}" already exists — skipping create-brain')
+    else:
+        info(f"creating system user {brain} (home + bash login shell)")
+        run(["useradd", "--create-home", "--shell", "/bin/bash", brain])
+        if not user_exists(brain):
+            die("useradd ran but the account still does not exist — check system logs.")
+        ok(f'account "{brain}" provisioned')
+    for db in ("/etc/subuid", "/etc/subgid"):
+        try:
+            has = any(l.startswith(brain + ":") for l in Path(db).read_text().splitlines())
+        except FileNotFoundError:
+            has = False
+        if not has:
+            info(f"allocating a namespace range for {brain} in {db}")
+            run(["usermod", "--add-subuids", "100000-165535", brain], check=False)
+            run(["usermod", "--add-subgids", "100000-165535", brain], check=False)
+            break
+    if not linger_enabled(brain):
+        run(["loginctl", "enable-linger", brain])
+    ok(f"linger enabled for {brain} (user services run headless)")
+
+
+def _ensure_engine_linux(args):
+    """Reuse the Linux engine artifact if present, else build it (build_engine dispatches to
+    _build_engine_linux). Mirrors the Windows ensure_engine precedence."""
+    _, brain_dir = brain_paths(args)
+    images_tar = linux_engine_dir(brain_dir) / "images.tar"
+    if getattr(args, "from_scratch", False):
+        info("--from-scratch: rebuilding the Linux engine artifact")
+        build_engine(args); return
+    if images_tar.is_file():
+        ok(f"engine artifact present ({images_tar.name}) — reusing (pass --from-scratch to rebuild)")
+        return
+    info("no engine artifact present — building from scratch (the default for a fresh deploy)")
+    build_engine(args)
+
+
+def _provision_runtime_linux(args):
+    """Rootless docker + login env + lay the gateway stack + bake the TLS cert. Ported from the
+    fixed linux_deploy_brain.py provision_runtime (cert SAN fix included). Does NOT bring the
+    stack up — that is the gateway stage."""
+    brain = args.brain
+    home = brain_home(brain)
+    if not home:
+        die(f"cannot resolve home for {brain}")
+    _, brain_dir = brain_paths(args)
+
+    # 1. Rootless Docker
+    if _linux_docker_ready(brain):
+        ok("rootless Docker already running as the brain")
+    else:
+        setup = shutil.which("dockerd-rootless-setuptool.sh") or "dockerd-rootless-setuptool.sh"
+        rc, _, e = _brain_sh(brain, f"export XDG_RUNTIME_DIR=/run/user/$(id -u); {shlex.quote(setup)} install")
+        if rc != 0:
+            die(f"dockerd-rootless-setuptool install failed (rc={rc}): {e}")
+        _brain_sh(brain, "systemctl --user enable --now docker")
+        if not _linux_docker_ready(brain):
+            die("rootless Docker did not come up as the brain after setup.")
+        ok("rootless Docker installed + running as the brain")
+
+    # 2. DOCKER_HOST into ~/.bashrc (idempotent)
+    _, uid, _ = _brain_sh(brain, "id -u"); uid = (uid or "").strip()
+    _, body, _ = _brain_sh(brain, "cat ~/.bashrc 2>/dev/null || true")
+    marker = "# brain rootless docker env"
+    if marker not in (body or ""):
+        line = (f"\n{marker}\nexport XDG_RUNTIME_DIR=/run/user/{uid}\n"
+                f"export DOCKER_HOST=unix:///run/user/{uid}/docker.sock\n")
+        _brain_sh(brain, f"printf '%s' {shlex.quote(line)} >> ~/.bashrc")
+        ok("DOCKER_HOST seeded into the brain's login environment")
+    else:
+        ok("DOCKER_HOST already present in ~/.bashrc")
+
+    # 3. Lay gateway stack + certs
+    canon_gateway = brain_dir / "system" / "brain_bin" / "gateway"
+    if not (canon_gateway / "gen-cert.sh").is_file():
+        die(f"gen-cert.sh not staged at {canon_gateway}")
+    compose_src = None
+    for rel in ("brain_etc/docker/compose.yaml", "brain_etc.example/docker/compose.yaml"):
+        if (brain_dir / rel).is_file():
+            compose_src = brain_dir / rel; break
+    if not compose_src:
+        die("compose.yaml not found under brain_etc/ or brain_etc.example/")
+    _brain_sh(brain, "mkdir -p ~/docker ~/gateway/gateway_out ~/knowledge/brain_rw/chroma ~/knowledge/brain_ro")
+    for rel in ("nginx", ".env.example"):
+        src = canon_gateway / rel
+        if src.exists():
+            _brain_sh(brain, f"cp -rn {shlex.quote(str(src))} ~/docker/ 2>/dev/null || true")
+    _brain_sh(brain, f"cp -n {shlex.quote(str(compose_src))} ~/docker/ 2>/dev/null || true")
+    _brain_sh(brain, "test -f ~/docker/.env || { cp ~/docker/.env.example ~/docker/.env 2>/dev/null || : ; "
+                     "grep -q '^CHROMA_MASTER_TOKEN_FOR_GW=' ~/docker/.env 2>/dev/null || "
+                     "echo CHROMA_MASTER_TOKEN_FOR_GW=$(openssl rand -hex 32) >> ~/docker/.env ; }")
+
+    # Cert SAN (the b610eaa fix): personal → no SAN; server → IP:<each global IPv4>.
+    posture = args.posture; san = ""
+    if posture == "server":
+        _, ip_out, _ = run_out(["bash", "-lc",
+            "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1"])
+        ips = sorted({x for x in (ip_out or "").split() if x})
+        if ips:
+            san = " ".join(f"IP:{ip}" for ip in ips)
+        else:
+            warn("server posture: could not resolve any global IPv4 — cert will be localhost-only")
+    gencert = "system/brain_bin/gateway/gen-cert.sh"   # repo-relative, run from brain_dir
+    _brain_sh(brain, f"cd {shlex.quote(str(brain_dir))} && bash {gencert} {san} || "
+                     f"bash {shlex.quote(str(canon_gateway / 'gen-cert.sh'))} {san}")
+    rc, _, _ = _brain_sh(brain, "test -s ~/gateway/gateway_out/cert.pem && test -s ~/gateway/gateway_out/cert.key")
+    if rc != 0:
+        die("cert generation did not produce ~/gateway/gateway_out/{cert.pem,cert.key} — see output above.")
+    ok("gateway stack laid + TLS cert generated" + (f" (SAN {san})" if san else " (personal)"))
+
+
+def _deploy_engine_linux(args):
+    """Load the engine's images into the brain's rootless store and restore the ollama model
+    volume, so the gateway stage brings the stack up offline (`--pull never`)."""
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    home = brain_home(brain)
+    eng_dir = linux_engine_dir(brain_dir)
+    images_tar = eng_dir / "images.tar"
+    models_tar = eng_dir / "ollama_models.tar"
+    vol = f"{brain}_ollama_models"
+    if not images_tar.is_file():
+        die(f"engine image bundle missing: {images_tar} — build-engine did not run or was cleared.")
+    p = _stage_artifact_to_brain(brain, home, images_tar)
+    _brain_docker(brain, f"docker load -i {shlex.quote(p)}")
+    _brain_sh(brain, f"rm -f {shlex.quote(p)}")
+    ok("engine images loaded into the brain's rootless store")
+    if models_tar.is_file():
+        _brain_docker(brain, f"docker volume create {shlex.quote(vol)}")
+        rc, mp, e = _brain_docker_out(brain,
+            f"docker volume inspect -f '{{{{ .Mountpoint }}}}' {shlex.quote(vol)}")
+        mp = (mp or "").strip()
+        if rc != 0 or not mp:
+            die(f"could not resolve mountpoint of {vol} to restore models: {e}")
+        pt = _stage_artifact_to_brain(brain, home, models_tar)
+        rc, _, e = _brain_sh(brain, f"tar -xf {shlex.quote(pt)} -C {shlex.quote(mp)}")
+        _brain_sh(brain, f"rm -f {shlex.quote(pt)}")
+        if rc != 0:
+            die(f"failed to restore ollama models into {vol}: {e}")
+        ok(f"ollama models restored into {vol}")
+    else:
+        info("no ollama_models.tar in the engine — models not seeded (roster was empty at build)")
+
+
+def _seam_linux(args):
+    """Seed brain_etc from the example template, lock POSIX perms (root:root, no write), and
+    install the read-only bind-mount unit at /opt/brain_truths. Ported from linux seam()."""
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    etc = brain_dir / "brain_etc"
+    example = brain_dir / "brain_etc.example"
+
+    etc.mkdir(parents=True, exist_ok=True)
+    if example.is_dir():
+        for src in sorted(example.rglob("*")):
+            rel = src.relative_to(example); dst = etc / rel
+            if src.is_dir():
+                dst.mkdir(parents=True, exist_ok=True); continue
+            if dst.exists():
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                dst.write_text(src.read_text(encoding="utf-8").replace("__BRAIN_NAME__", brain),
+                               encoding="utf-8")
+            except (UnicodeDecodeError, ValueError):
+                dst.write_bytes(src.read_bytes())
+        ok("brain_etc/ seeded from ADR-0015 template")
+    else:
+        warn("no brain_etc.example/ — seeding minimal gateway config")
+        (etc / "gateway").mkdir(parents=True, exist_ok=True)
+        tmpl = brain_dir / "system" / "brain_bin" / "gateway" / "nginx" / "nginx.conf.template"
+        if tmpl.is_file():
+            shutil.copy2(tmpl, etc / "gateway" / "nginx.conf.template")
+
+    if example.is_dir() and any(etc.iterdir()):
+        shutil.rmtree(example, ignore_errors=True)
+        ok("brain_etc.example/ template removed post-seed")
+
+    run(["chown", "-R", "root:root", str(etc)])
+    run(["chmod", "-R", "u=rwX,go=rX", str(etc)])
+    ok("brain_etc/ perms locked (root:root, world-readable, no write)")
+
+    Path(MOUNT_POINT).mkdir(parents=True, exist_ok=True)
+    unit_path = Path("/etc/systemd/system") / seam_mount_unit()
+    unit = (
+        "[Unit]\n"
+        "Description=Brain config-exposure seam (read-only bind mount of brain_etc)\n"
+        "# no After=local-fs.target: mount units are implicitly Before=local-fs.target\n"
+        "# (DefaultDependencies); an explicit After= creates an ordering cycle -> flapping.\n\n"
+        "[Mount]\n"
+        f"What={etc}\n"
+        f"Where={MOUNT_POINT}\n"
+        "Type=none\n"
+        "Options=bind,ro\n\n"
+        "[Install]\n"
+        "WantedBy=multi-user.target\n"
+    )
+    unit_path.write_text(unit)
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", "--now", seam_mount_unit()])
+    rc, opts, _ = run_out(["findmnt", "-no", "OPTIONS", MOUNT_POINT])
+    if "ro" not in (opts or ""):
+        warn(f"seam mounted but read-only not confirmed (findmnt OPTIONS: {opts!r})")
+    else:
+        ok(f"config-exposure seam mounted read-only at {MOUNT_POINT}")
+
+
+def _gateway_linux(args):
+    """Port/bind into .env, mint bootstrap + neuron tokens, regenerate the path-router, rebuild
+    the apply manifest, then apply the seam and bring the stack up offline. Ported from linux
+    gateway() with `--pull never` (images are preloaded by _deploy_engine_linux)."""
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    port = args.port
+    bind_choice = getattr(args, "bind", None) or args.posture
+    bind = {"personal": "127.0.0.1", "server": "0.0.0.0"}.get(bind_choice, bind_choice)
+
+    _brain_sh(brain, f"cd ~/docker && "
+                     f"( grep -q '^GATEWAY_PORT=' .env && sed -i 's/^GATEWAY_PORT=.*/GATEWAY_PORT={port}/' .env "
+                     f"|| echo GATEWAY_PORT={port} >> .env ) && "
+                     f"( grep -q '^GATEWAY_BIND=' .env && sed -i 's/^GATEWAY_BIND=.*/GATEWAY_BIND={bind}/' .env "
+                     f"|| echo GATEWAY_BIND={bind} >> .env )")
+
+    reader_tok = _ensure_bootstrap_token(brain_dir, "reader")
+    writer_tok = _ensure_bootstrap_token(brain_dir, "writer")
+
+    seeder = brain_dir / "system" / "brain_sbin" / "seed_neuron_tokens.py"
+    if seeder.is_file():
+        rc, _, e = run_out([sys.executable, str(seeder), "--brain-dir", str(brain_dir), "--action-caller"])
+        ok("neuron tokens auto-minted") if rc == 0 else warn(f"seed_neuron_tokens rc={rc}: {e}")
+    else:
+        warn("seed_neuron_tokens.py not staged — skipping neuron token mint")
+
+    gcfg = brain_dir / "system" / "brain_sbin" / "gateway_config.py"
+    if gcfg.is_file():
+        rc, _, e = run_out([sys.executable, str(gcfg), "--brain-dir", str(brain_dir)])
+        ok("gateway path-router regenerated") if rc == 0 else warn(f"gateway_config rc={rc}: {e}")
+    else:
+        warn("gateway_config.py not staged — skipping path-router regen")
+
+    gwdir = brain_dir / "brain_etc" / "gateway"; reg = gwdir / "token_registry"
+    if reg.is_file():
+        run(["chown", "root:root", str(reg)]); run(["chmod", "600", str(reg)])
+    for name in ("reader_tokens.map", "writer_tokens.map", "ollama_use.map", "ollama_admin.map"):
+        f = gwdir / name
+        if f.is_file():
+            run(["chown", "root:root", str(f)]); run(["chmod", "644", str(f)])
+    info(f"    reader (read-only): Bearer {reader_tok}")
+    info(f"    writer (read+write): Bearer {writer_tok}")
+
+    brain_sbin = brain_dir / "system" / "brain_sbin"
+    manifest = brain_dir / "brain_etc" / "wsl" / "apply.manifest"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    rc, _, e = run_out([sys.executable, "-c",
+        "import sys; sys.path.insert(0, sys.argv[1]); import brain_truths as bt; "
+        "open(sys.argv[4], 'w', newline='\\n').write(bt.build_manifest(sys.argv[2], sys.argv[3]))",
+        str(brain_sbin), brain, str(brain_dir), str(manifest)])
+    ok("apply manifest rebuilt") if rc == 0 else warn(f"build_manifest rc={rc}: {e}")
+
+    apply_sh = brain_dir / "system" / "brain_bin" / "provision" / "apply_brain_truths.sh"
+    recreate = "cd ~/docker && docker compose up -d --force-recreate --pull never"
+    apply = f"bash {shlex.quote(str(apply_sh))} -- bash -lc {shlex.quote(recreate)}"
+    rc, out, e = _brain_sh(brain, apply)
+    if rc != 0:
+        die(f"seam apply + stack recreate FAILED (rc={rc}).\n{out}{e}")
+    ok("seam applied + base stack recreated (chroma + gateway + ollama + fail2ban, mode C live)")
+
+
+def _residency_linux(args):
+    """Install the <brain>-docker-stack.service systemd --user unit + linger so the stack comes
+    up headless at boot. Ported from linux residency()."""
+    brain = args.brain
+    home = brain_home(brain)
+    if not linger_enabled(brain):
+        run(["loginctl", "enable-linger", brain])
+    unit_dir = Path(home) / ".config" / "systemd" / "user"
+    unit_file = unit_dir / f"{stack_service(brain)}.service"
+    unit = (
+        "[Unit]\n"
+        "Description=Brain Chroma+gateway stack (bring up at boot)\n"
+        "After=docker.service\n"
+        "Wants=docker.service\n\n"
+        "[Service]\n"
+        "Type=oneshot\n"
+        "RemainAfterExit=yes\n"
+        f"WorkingDirectory={home}/docker\n"
+        "ExecStart=/usr/bin/docker compose up -d\n"
+        "ExecStop=/usr/bin/docker compose down\n\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+    _brain_sh(brain, f"mkdir -p {shlex.quote(str(unit_dir))}")
+    _brain_sh(brain, f"cat > {shlex.quote(str(unit_file))} <<'EOF'\n{unit}EOF")
+    rc, _, e = _brain_sh(brain, f"systemctl --user daemon-reload && "
+                                f"systemctl --user enable --now {stack_service(brain)}.service")
+    if rc != 0:
+        die(f"residency: enabling {stack_service(brain)}.service failed (rc={rc}): {e}")
+    ok(f"residency wired: {stack_service(brain)}.service enabled + linger on")
+
+
+def _verify_linux(args):
+    """Prove the deployment: no-token 403, reader 200, reset 403, and boot persistence. Ported
+    from linux verify() including the chroma-port fix (probe CHROMA_PORT, not the action port)."""
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    _, cp_out, _ = _brain_sh(brain, "grep -m1 -oE '^CHROMA_PORT=[0-9]+' ~/docker/.env 2>/dev/null | cut -d= -f2")
+    port = (cp_out or "").strip() or str(args.port)
+    cacert = "--cacert ~/gateway/gateway_out/cert.pem"
+    base = f"https://127.0.0.1:{port}/api/v2"
+
+    rc, out, e = _brain_sh(brain, f"curl -s -o /dev/null -w '%{{http_code}}' {cacert} {base}/heartbeat")
+    if not (rc == 0 and _http_code(out) == "403"):
+        die(f"VERIFY FAILED — no-token heartbeat expected 403, got '{_http_code(out)}' (rc={rc}).\n{out}{e}")
+    ok(f"no-token heartbeat 403 on :{port} (mode C — admission gate closed)")
+
+    reader = _read_seam_token(brain_dir, "reader")
+    if reader:
+        rc, out, e = _brain_sh(brain, f"curl -s -o /dev/null -w '%{{http_code}}' {cacert} "
+                                      f"-H 'Authorization: Bearer {reader}' {base}/heartbeat")
+        if not (rc == 0 and _http_code(out) == "200"):
+            die(f"VERIFY FAILED — reader-token heartbeat expected 200, got '{_http_code(out)}' (rc={rc}).\n{out}{e}")
+        ok("reader-token heartbeat 200 — Chroma reachable through the gateway")
+    else:
+        warn("no reader token in the registry — skipping the 200 gate")
+
+    rc, out, e = _brain_sh(brain, f"curl -s -o /dev/null -w '%{{http_code}}' {cacert} -X POST {base}/reset")
+    if _http_code(out) == "403":
+        ok("reset endpoint 403 (write-sealed) — gateway posture correct")
+    else:
+        warn(f"reset endpoint returned '{_http_code(out)}', expected 403 (write-sealed).")
+
+    if getattr(args, "skip_residency", False):
+        warn("--skip-residency: boot persistence NOT verified")
+    else:
+        if not linger_enabled(brain):
+            die("VERIFY FAILED — linger not enabled; the stack will not survive logout/boot.")
+        rc, out, _ = _brain_sh(brain, f"systemctl --user is-enabled {stack_service(brain)}.service")
+        if "enabled" not in (out or ""):
+            die(f"VERIFY FAILED — {stack_service(brain)}.service is not enabled (boot persistence).")
+        ok("residency verified (linger on + stack unit enabled)")
+    ok("VERIFY PASSED")
+
+
+def _cmd_deploy_linux(args):
+    validate_brain_name(args.brain)
+    if getattr(args, "dry_run", False):
+        if not getattr(args, "from_scratch", False):
+            die("--dry-run only previews the --from-scratch Linux engine build; the rest of deploy "
+                "has live side effects. Add --from-scratch, or drop --dry-run.")
+        banner(f"DRY-RUN: from-scratch Linux engine build for {args.brain} (deploy stages NOT run)")
+        build_engine(args)
+        banner("DRY-RUN complete — no deploy changes made")
+        return
+    banner(f"Deploy brain (Linux): {args.brain}  (posture={args.posture})")
+    _root, _ = brain_paths(args)
+    os.environ[INSTALL_ROOT_ENV] = str(_root)
+    total = 10 if not args.skip_gateway else 6
+    stage(1, total, "Preflight");                                  _preflight_linux(args)
+    stage(2, total, "Create brain");                               _create_brain_linux(args)
+    stage(3, total, "Stage code (source/ -> brain)");              stage_package(args)
+    stage(4, total, "Engine (reuse if present, else build)");      _ensure_engine_linux(args)
+    stage(5, total, "Provision runtime (rootless Docker + stack)"); _provision_runtime_linux(args)
+    stage(6, total, "Deploy engine (load images + restore models)"); _deploy_engine_linux(args)
+    if not args.skip_gateway:
+        stage(7, total, "Config-exposure seam");                   _seam_linux(args)
+        stage(8, total, "Gateway (port + token)");                 _gateway_linux(args)
+        stage(9, total, "Residency (systemd + linger)")
+        if not getattr(args, "skip_residency", False):
+            _residency_linux(args)
+        else:
+            info("--skip-residency: stack up; boot persistence NOT wired")
+        stage(10, total, "Verify");                                _verify_linux(args)
+    else:
+        info("--skip-gateway: runtime provisioned + engine loaded; gateway/residency/verify skipped")
+    banner(f"DEPLOY COMPLETE: {args.brain}")
+
+
+def _cmd_teardown_linux(args):
+    validate_brain_name(args.brain)
+    destructive = getattr(args, "purge", False)
+    banner(f"Teardown brain (Linux): {args.brain}" + ("  [PURGE]" if destructive else ""))
+    if destructive and not getattr(args, "yes", False):
+        die("--purge is destructive (removes the account, home, and brains/<brain>). Re-run with --yes.")
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    if user_exists(brain):
+        _brain_sh(brain, f"systemctl --user disable --now {stack_service(brain)}.service 2>/dev/null || true")
+        _brain_sh(brain, "cd ~/docker && docker compose down 2>/dev/null || true")
+        ok("stack stopped")
+    run(["systemctl", "disable", "--now", seam_mount_unit()], check=False)
+    unit_path = Path("/etc/systemd/system") / seam_mount_unit()
+    if unit_path.is_file():
+        unit_path.unlink()
+        run(["systemctl", "daemon-reload"], check=False)
+    ok("config-exposure seam removed")
+    if shutil.which("ufw"):
+        run(["ufw", "delete", "allow", f"{args.port}/tcp"], check=False)
+    if destructive:
+        run(["loginctl", "disable-linger", brain], check=False)
+        run(["userdel", "--remove", brain], check=False)
+        if brain_dir.is_dir():
+            shutil.rmtree(brain_dir, ignore_errors=True)
+        ok("account + home + brains/<brain> purged")
+    else:
+        info("non-destructive teardown: account, home, images, ollama volume, and brain_etc SURVIVE "
+             "(use --purge --yes to remove everything).")
+    banner("TEARDOWN COMPLETE")
+
+
+def _cmd_status_linux(args):
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    banner(f"Status (Linux): {brain}")
+    (ok if user_exists(brain) else warn)(f"account {brain}: " + ("present" if user_exists(brain) else "ABSENT"))
+    if user_exists(brain):
+        (ok if _linux_docker_ready(brain) else warn)("rootless docker: " +
+            ("ready" if _linux_docker_ready(brain) else "not reachable"))
+        (ok if linger_enabled(brain) else warn)("linger: " + ("enabled" if linger_enabled(brain) else "OFF"))
+        rc, out, _ = _brain_sh(brain, f"systemctl --user is-enabled {stack_service(brain)}.service 2>/dev/null")
+        (ok if "enabled" in (out or "") else warn)(f"stack unit: {(out or '').strip() or 'not enabled'}")
+    rc, opts, _ = run_out(["findmnt", "-no", "OPTIONS", MOUNT_POINT])
+    (ok if "ro" in (opts or "") else warn)(f"seam {MOUNT_POINT}: " + (opts.strip() if opts else "not mounted"))
+    art = linux_engine_dir(brain_dir) / "images.tar"
+    (ok if art.is_file() else info)(f"engine artifact: " + ("present" if art.is_file() else "none"))
 
 
 def build_engine(args):
@@ -2744,6 +3232,8 @@ def verify(args):
 # ---------------------------------------------------------------------------
 
 def cmd_deploy(args):
+    if _IS_LINUX:
+        return _cmd_deploy_linux(args)
     validate_brain_name(args.brain)
     # --dry-run only previews the from-scratch build (which honors it) then stops — the
     # rest of deploy (installer/gateway/verify) has live side effects and is not dry-runnable.
@@ -3182,6 +3672,8 @@ def _release_profile_handles(profile, sid):
 
 
 def cmd_teardown(args):
+    if _IS_LINUX:
+        return _cmd_teardown_linux(args)
     validate_brain_name(args.brain)
     destructive = args.purge
     banner(f"Teardown brain: {args.brain}  ({'PURGE' if destructive else 'stop/reset'})")
@@ -3309,6 +3801,10 @@ def cmd_teardown(args):
 # ---------------------------------------------------------------------------
 
 def cmd_verify(args):
+    if _IS_LINUX:
+        validate_brain_name(args.brain)
+        banner(f"Verify brain (Linux): {args.brain}")
+        return _verify_linux(args)
     validate_brain_name(args.brain)
     banner(f"Verify brain: {args.brain}")
     # verify() drives EVERY in-distro probe (NIC gate, gateway heartbeats, docker ps/-a)
@@ -3331,6 +3827,9 @@ def cmd_verify(args):
 
 
 def cmd_status(args):
+    if _IS_LINUX:
+        validate_brain_name(args.brain)
+        return _cmd_status_linux(args)
     validate_brain_name(args.brain)
     banner(f"Status: {args.brain}")
     root, brain_dir = brain_paths(args)
@@ -3432,6 +3931,9 @@ def parse_args():
     t.add_argument("--purge", action="store_true",
                    help="destructive: unregister distro (delete data) + remove account + folder")
     t.add_argument("--yes", action="store_true", help="confirm a --purge")
+    t.add_argument("--port", type=int, default=8000,
+                   help="gateway port to close in the firewall on Linux teardown (ufw delete "
+                        "allow <port>/tcp); ignored on Windows (the port registry drives release)")
     t.add_argument("--install-root", default=None,
                    help="REQUIRED unless $AIOS_INSTALL_ROOT is set: the dir that holds brains/<brain>/")
     t.set_defaults(func=cmd_teardown)
