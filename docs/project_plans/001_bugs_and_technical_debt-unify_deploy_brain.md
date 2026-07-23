@@ -62,8 +62,13 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    `linux_deploy_brain.py` (Section 7). The WindowsBackend is already repointed to `deploy_brain`.
 3. **Impact:** LOW-MEDIUM — stale probes mis-report health; the lingering driver is a dead file kept only
    for the doctor's Linux import (deploy no longer uses it).
-4. **Status:** OPEN → (a) cleared at Section 8 validation; (b) do the LinuxBackend rewire, then
-   `git rm linux_deploy_brain.py` to finish Section 7.
+4. **Status:** (b) **FIXED** (2026-07-23) — `brain_doctor.py`'s LinuxBackend now does
+   `import deploy_brain as ldb`; the three renamed primitives are mapped (`brain_sh`→`_brain_sh`,
+   `_docker_ready`→`_linux_docker_ready`, `require_root`→`require_admin`); all others keep their
+   names. Both files `py_compile`-clean; a smoke test confirms every `ldb.*` attribute resolves on
+   `deploy_brain`. `linux_deploy_brain.py` **deleted** (`git rm`) — Section 7 complete; no importer
+   remains. (a) STILL OPEN → re-verify `brain_doctor diagnose` against a brain deployed by
+   `deploy_brain.py` at Section 8 (the live teardown/redeploy of dev_brain now in progress).
 
 ## DEBT-001-4 — Linux engine build runs as the real brain account, not an isolated build user
 1. **Decision/context:** Windows `build_engine` runs in a throwaway scratch distro, so the build never

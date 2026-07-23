@@ -35,11 +35,12 @@ identity helper (`run_as_brain_argv`). Landed + pushed:
 - **S4/5/6** full Linux deploy (`_cmd_deploy_linux`: preflight/create/provision/seam/gateway/residency/verify) + engine restore (`docker load` + volume restore → `compose --pull never`); CLI parity; cert contract (server-SAN-all-global-IPv4) in both paths. Ported faithfully from the FIXED `linux_deploy_brain.py` (NOTE 001-8).
 - **S7** rename done; `brain_doctor` Windows import repointed; doc sweep done.
 Everything compiles and every Linux command sequence is asserted via stubbed-run harnesses.
-**Remaining:** (1) **S8 live validation** — DEFERRED to a supervised run (dev_brain user-handled; do NOT
-fire an unsupervised live deploy). (2) Delete `linux_deploy_brain.py` — blocked on rewiring
-`brain_doctor`'s LinuxBackend to the trunk's primitives (DEBT-001-3b). (3) Neuron bring-up on Linux (DEBT-001-1b).
-Recommended next: DEBT-001-3b (doctor LinuxBackend → deploy_brain) then `git rm linux_deploy_brain.py`;
-then a supervised Section 8 on a scratch brain.
+**Remaining:** (1) **S8 live validation** — a supervised teardown+redeploy (IN PROGRESS 2026-07-23 on
+dev_brain, user present). (2) Neuron bring-up on Linux (DEBT-001-1b). ~~Delete `linux_deploy_brain.py`~~
+**DONE 2026-07-23** (DEBT-001-3b / NOTE 001-9): `brain_doctor`'s LinuxBackend rewired to `deploy_brain`,
+old driver `git rm`'d, Section 7 complete.
+Recommended next: finish the supervised Section 8 (teardown+redeploy, then `brain_doctor diagnose` =
+DEBT-001-3a live re-verify).
 
 ## What to read, in order
 1. This file.

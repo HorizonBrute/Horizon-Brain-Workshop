@@ -19,8 +19,8 @@ PLATFORM
         under system/linux_engine/ (no VM), residency = a `systemd --user` unit + linger,
         seam = a bind,ro mount unit, identity = `sudo -u <brain> -H`, rootless Docker.
     The runtime OS is detected (`_IS_LINUX`/`_IS_WINDOWS`); an unsupported OS is refused.
-    macOS is a later objective. (`linux_deploy_brain.py` is a retained legacy file kept
-    only for an internal importer; it is NOT the Linux deploy path — this is.)
+    macOS is a later objective. (The former `linux_deploy_brain.py` driver has been
+    retired; this file is now the sole Linux deploy path, and brain_doctor imports it.)
 
 WHY THIS EXISTS
     The capability to stand up a brain is real but scattered across lanes:

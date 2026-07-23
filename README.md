@@ -82,7 +82,6 @@ README.md                     ← you are here (the front door)
 VERSION                       ← package version (semver); the installer reads it
 LICENSE                       ← AGPL-3.0
 deploy_brain.py               ← cross-platform deploy orchestrator (Windows/WSL2 run elevated; native Linux run with sudo)
-linux_deploy_brain.py         ← retained legacy Linux orchestrator (kept for an internal tool that imports it; not the way to deploy)
 factory/                      ← build tooling + brain image (dir keeps its historical name; the deploy staging root)
   create_brain.py             ← standalone brain-provisioning provider (OS account/group/ACL/keyring)
   source/                     ← THE BRAIN IMAGE: exactly the tree a deployed brain gets (copied at deploy)

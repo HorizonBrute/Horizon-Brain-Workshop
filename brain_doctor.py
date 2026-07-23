@@ -11,8 +11,8 @@ It is OS-aware and dispatches to a platform backend, each of which reuses that
 platform's deploy driver as a library rather than re-implementing any deploy
 machinery:
 
-    Linux    -> linux_deploy_brain.py   (systemd --user + rootless Docker)
-                reuses brain_sh/as_brain (sudo -u), _docker_ready, stack_service,
+    Linux    -> deploy_brain.py   (systemd --user + rootless Docker)
+                reuses _brain_sh (sudo -u), _linux_docker_ready, stack_service,
                 seam naming, resolve_install_root, gateway_config.py
     Windows  -> deploy_brain.py  (WSL2 per-user distro + Task Scheduler)
                 reuses distro_exists/distro_imported_as_brain, residency_task*,
@@ -39,7 +39,7 @@ TWO VERBS (identical surface on every OS)
 STATUS
     The Linux backend is exercised live. The Windows backend is static-validated only
     (py_compile) and mirrors deploy_brain.py's own primitives — treat it as
-    first-live until run on a real WSL2 host, exactly as linux_deploy_brain.py was.
+    first-live until run on a real WSL2 host, exactly as the Linux path once was.
 
 USAGE
     python3 brain_doctor.py diagnose --brain X [--install-root DIR] [--port N]
@@ -133,7 +133,7 @@ class Report:
 
 
 # ===========================================================================
-# Linux backend — systemd --user + rootless Docker, via linux_deploy_brain.py
+# Linux backend — systemd --user + rootless Docker, via deploy_brain.py
 # ===========================================================================
 
 class LinuxBackend:
@@ -141,22 +141,22 @@ class LinuxBackend:
 
     def __init__(self):
         # Lazy import: only the platform we run on loads its (large) driver.
-        import linux_deploy_brain as ldb  # noqa: E402
+        import deploy_brain as ldb  # noqa: E402
         self.ldb = ldb
 
     # -- probes (all via sudo -u <brain> so rootless-Docker env resolves) ----
 
     def _unit_state(self, brain, unit):
-        _, active, _  = self.ldb.brain_sh(brain, f"systemctl --user is-active {unit} 2>/dev/null")
-        _, enabled, _ = self.ldb.brain_sh(brain, f"systemctl --user is-enabled {unit} 2>/dev/null")
+        _, active, _  = self.ldb._brain_sh(brain, f"systemctl --user is-active {unit} 2>/dev/null")
+        _, enabled, _ = self.ldb._brain_sh(brain, f"systemctl --user is-enabled {unit} 2>/dev/null")
         return active.strip(), enabled.strip()
 
     def _compose_config_ok(self, brain):
-        rc, out, e = self.ldb.brain_sh(brain, "cd ~/docker && docker compose config -q 2>&1")
+        rc, out, e = self.ldb._brain_sh(brain, "cd ~/docker && docker compose config -q 2>&1")
         return rc == 0, (out + e).strip()
 
     def _compose_ps(self, brain):
-        rc, out, _ = self.ldb.brain_sh(
+        rc, out, _ = self.ldb._brain_sh(
             brain, "cd ~/docker && docker compose ps -a "
                    "--format '{{.Service}}|{{.State}}|{{.Status}}' 2>/dev/null")
         rows = []
@@ -170,7 +170,7 @@ class LinuxBackend:
         hb = (f"curl -s -o /dev/null -w '%{{http_code}}' --max-time 5 "
               f"--cacert ~/gateway/gateway_out/cert.pem "
               f"https://127.0.0.1:{port}/api/v2/heartbeat 2>/dev/null")
-        _, out, _ = self.ldb.brain_sh(brain, hb)
+        _, out, _ = self.ldb._brain_sh(brain, hb)
         return _http_code(out)
 
     # -- diagnose -----------------------------------------------------------
@@ -193,7 +193,7 @@ class LinuxBackend:
         else:
             rep.add("WARN", "linger", "DISABLED — stack will not come up after reboot")
 
-        daemon_up = ldb._docker_ready(brain)
+        daemon_up = ldb._linux_docker_ready(brain)
         d_active, d_enabled = self._unit_state(brain, "docker")
         rep.add("OK" if daemon_up else "FAIL", "rootless docker",
                 f"daemon {'answering' if daemon_up else 'NOT answering'} (unit {d_active}/{d_enabled})")
@@ -262,7 +262,7 @@ class LinuxBackend:
         ldb = self.ldb
         brain = args.brain
         _, brain_dir = ldb.brain_paths(args)
-        ldb.require_root()
+        ldb.require_admin()
         if not ldb.user_exists(brain):
             die(f"cannot repair: OS user '{brain}' does not exist (deploy it first).")
 
@@ -272,22 +272,22 @@ class LinuxBackend:
         else:
             ok("linger already enabled")
 
-        if ldb._docker_ready(brain):
+        if ldb._linux_docker_ready(brain):
             ok("rootless docker already up")
         else:
             info("rootless docker not answering — systemctl --user enable --now docker")
-            ldb.brain_sh(brain, "systemctl --user enable --now docker")
-            if not ldb._docker_ready(brain):
+            ldb._brain_sh(brain, "systemctl --user enable --now docker")
+            if not ldb._linux_docker_ready(brain):
                 die("rootless docker still not answering — inspect: systemctl --user status docker\n"
                     "    (common: unprivileged userns disabled, /run/user/<uid> absent).")
             ok("rootless docker up")
 
-        ldb.brain_sh(brain, "systemctl --user daemon-reload"); ok("systemd --user daemon-reload")
+        ldb._brain_sh(brain, "systemctl --user daemon-reload"); ok("systemd --user daemon-reload")
 
         if args.restart_docker:
             info("--restart-docker — restarting the rootless daemon")
-            ldb.brain_sh(brain, "systemctl --user restart docker")
-            if not ldb._docker_ready(brain):
+            ldb._brain_sh(brain, "systemctl --user restart docker")
+            if not ldb._linux_docker_ready(brain):
                 die("rootless docker did not come back after restart.")
             ok("rootless docker restarted")
 
@@ -310,26 +310,26 @@ class LinuxBackend:
         up = "cd ~/docker && docker compose up -d" + (" --force-recreate" if args.recreate else "")
         if enabled == "enabled" and not args.recreate:
             info(f"restarting residency unit ({stack})")
-            rc, out, e = ldb.brain_sh(brain, f"systemctl --user restart {stack}")
+            rc, out, e = ldb._brain_sh(brain, f"systemctl --user restart {stack}")
             if rc != 0:
                 warn(f"unit restart rc={rc}; falling back to compose up.\n{out}{e}")
-                rc, out, e = ldb.brain_sh(brain, up)
+                rc, out, e = ldb._brain_sh(brain, up)
         elif enabled != "enabled":
             info(f"stack unit not enabled — enabling + starting ({stack})")
-            rc, out, e = ldb.brain_sh(brain, f"systemctl --user enable --now {stack}")
+            rc, out, e = ldb._brain_sh(brain, f"systemctl --user enable --now {stack}")
             if rc != 0:
                 warn(f"enable --now rc={rc}; falling back to compose up.\n{out}{e}")
-                rc, out, e = ldb.brain_sh(brain, up)
+                rc, out, e = ldb._brain_sh(brain, up)
         else:
             info(f"bringing stack up ({'force-recreate' if args.recreate else 'up -d'})")
-            rc, out, e = ldb.brain_sh(brain, up)
+            rc, out, e = ldb._brain_sh(brain, up)
         if rc != 0:
             die(f"stack bring-up FAILED (rc={rc}).\n{out}{e}")
         ok("stack bring-up issued")
         return 0
 
     def _compose_config_ok(self, brain):  # noqa: F811 (repair reuses the probe)
-        rc, out, e = self.ldb.brain_sh(brain, "cd ~/docker && docker compose config -q 2>&1")
+        rc, out, e = self.ldb._brain_sh(brain, "cd ~/docker && docker compose config -q 2>&1")
         return rc == 0, (out + e).strip()
 
     def _regen_config(self, brain_dir):
