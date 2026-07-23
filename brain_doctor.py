@@ -14,7 +14,7 @@ machinery:
     Linux    -> linux_deploy_brain.py   (systemd --user + rootless Docker)
                 reuses brain_sh/as_brain (sudo -u), _docker_ready, stack_service,
                 seam naming, resolve_install_root, gateway_config.py
-    Windows  -> windows_deploy_brain.py  (WSL2 per-user distro + Task Scheduler)
+    Windows  -> deploy_brain.py  (WSL2 per-user distro + Task Scheduler)
                 reuses distro_exists/distro_imported_as_brain, residency_task*,
                 brain_paths, and the staged run_as_brain.py (--wsl) to exec in-distro
     macOS    -> not yet a runtime target (deploy is objective 009); the doctor says so
@@ -38,7 +38,7 @@ TWO VERBS (identical surface on every OS)
 
 STATUS
     The Linux backend is exercised live. The Windows backend is static-validated only
-    (py_compile) and mirrors windows_deploy_brain.py's own primitives — treat it as
+    (py_compile) and mirrors deploy_brain.py's own primitives — treat it as
     first-live until run on a real WSL2 host, exactly as linux_deploy_brain.py was.
 
 USAGE
@@ -345,14 +345,14 @@ class LinuxBackend:
 
 # ===========================================================================
 # Windows backend — WSL2 per-user distro + Task Scheduler, via
-# windows_deploy_brain.py. STATIC-VALIDATED ONLY (see module STATUS note).
+# deploy_brain.py. STATIC-VALIDATED ONLY (see module STATUS note).
 # ===========================================================================
 
 class WindowsBackend:
     label = "WSL2 distro + Task Scheduler (STATIC-VALIDATED — first-live on a real host)"
 
     def __init__(self):
-        import windows_deploy_brain as wdb  # noqa: E402
+        import deploy_brain as wdb  # noqa: E402
         self.wdb = wdb
 
     def _wsl(self, brain, brain_dir, script):
@@ -445,7 +445,7 @@ class WindowsBackend:
             ok(f"wsl distro brain-{brain} boots")
         else:
             die(f"wsl distro brain-{brain} is not launchable — cannot repair the runtime.\n"
-                "    Re-deploy with windows_deploy_brain.py (the distro import is a deploy stage).")
+                "    Re-deploy with deploy_brain.py (the distro import is a deploy stage).")
 
         # 2. Optional deep reset of the engine (bounce the distro).
         if args.restart_docker:
