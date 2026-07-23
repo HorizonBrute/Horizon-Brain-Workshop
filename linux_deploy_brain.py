@@ -578,14 +578,18 @@ def provision_runtime(args):
     posture = args.posture
     san = ""
     if posture == "server":
-        rc_ip, ip_out, _ = run_out(["bash", "-lc",
-            "ip -4 route get 1.1.1.1 2>/dev/null | grep -oP 'src \\K[0-9.]+'"])
-        lan_ip = (ip_out or "").strip()
-        if lan_ip:
-            san = f"IP:{lan_ip}"
+        # ALL global-scope IPv4s, not just the default-route src: a VPN/tunnel (tailscale,
+        # wireguard) commonly owns the default route, so `ip route get 1.1.1.1` would put the
+        # tunnel IP in the SAN and MISS the real LAN IP a client on the subnet connects to
+        # (cert-name mismatch on every LAN request). Enumerate every global IPv4 and add each.
+        _, ip_out, _ = run_out(["bash", "-lc",
+            "ip -4 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1"])
+        ips = sorted({x for x in (ip_out or "").split() if x})
+        if ips:
+            san = " ".join(f"IP:{ip}" for ip in ips)
         else:
-            warn("server posture: could not resolve a LAN IP for the cert SAN — generating a "
-                 "localhost-only cert (off-box TLS clients will not verify the host IP).")
+            warn("server posture: could not resolve any global IPv4 for the cert SAN — generating "
+                 "a localhost-only cert (off-box TLS clients will not verify the host IP).")
     gencert = "system/brain_bin/gateway/gen-cert.sh"
     if (canon_gateway / "gen-cert.sh").is_file():
         _, out_c, e_c = brain_sh(brain,
