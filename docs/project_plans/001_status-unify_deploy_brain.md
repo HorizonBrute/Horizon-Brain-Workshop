@@ -42,10 +42,10 @@ When a whole Section reaches `VERIFIED`, move its block into
 **Status:** DONE (compile + asserted; e2e at Section 8) — the correct cert contract is now in BOTH Linux paths: `_build_engine_linux` bakes with no-arg gen-cert (personal), and `_provision_runtime_linux` gens at deploy with the server-posture typed-SAN-all-global-IPv4 translation (the b610eaa fix) + a hard `test -s cert.pem && test -s cert.key` rc-check (no false-green). Harness asserts the posture word never reaches gen-cert. Windows trunk already correct (`stage4_brain.sh:99`).
 
 ## Section 7 — Migrate, retire, document
-**Status:** NOT STARTED · **Depends:** 5
+**Status:** MOSTLY DONE · **Rename DONE:** `git mv windows_deploy_brain.py deploy_brain.py`; `brain_doctor.py` WindowsBackend import repointed → `deploy_brain` (both compile). Doc/instruction reference sweep (README/INSTALL/DEPLOYMENT/TROUBLESHOOTING/onboard/package/context_pointer) done separately. **DEFERRED — deleting `linux_deploy_brain.py`:** `brain_doctor.py` LinuxBackend still `import linux_deploy_brain as ldb` for primitives whose names differ in the trunk (`as_brain`/`brain_sh` vs `run_as_brain_argv`/`_brain_sh`) → rewiring the doctor's Linux backend to the trunk = DEBT-001-3 (extended). No functional dependency on the old driver for DEPLOYING — `deploy_brain.py` handles Linux end-to-end; the rogue commits (NOTE 001-8) are moot once it's deleted.
 
 ## Section 8 — Validation: rebuild dev_brain via unified path
-**Status:** NOT STARTED · **Depends:** 4, 6
+**Status:** DEFERRED to user (NOTE 001-8) · dev_brain is user-handled and healthy, so no unsupervised live rebuild from the agent. Validation = a supervised `deploy_brain.py deploy` run on a Linux host (ideally a scratch brain, not live dev_brain) when the user is present. All Linux code is compile-clean + command-sequence-asserted via stubbed harnesses; Section 8 remains the only unproven-live step.
 
 ---
 

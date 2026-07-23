@@ -28,16 +28,16 @@ If neither is set, the deploy stops with a message telling you to set one. `<ins
 throughout these docs means that directory — the one that contains `<brain>/`.
 
 ## Layout
-- `windows_deploy_brain.py` — **the Windows/WSL2 deploy orchestrator** (host-side; see below).
-- `linux_deploy_brain.py` — **the native-Linux deploy orchestrator** (systemd + rootless
-  Docker + bind-mount seam, no VM). Run with `sudo`; see its module docstring.
+- `deploy_brain.py` — **the cross-platform deploy orchestrator** (host-side; see below). Run
+  elevated on Windows/WSL2, or with `sudo` on native Linux (systemd + rootless Docker +
+  bind-mount seam, no VM). See its module docstring.
 - `factory/source/` — the brain image: exactly the tree a deployed brain gets.
 - `factory/source/system/brain_bin/`, `.../brain_sbin/` — tier-1 canon (code only; runtime +
   secrets excluded).
 - `docs/` — these operational docs.
 
 > **Which files reach a brain, and when?** There is **no build/repackage step**. The
-> orchestrator (`windows_deploy_brain.py`) runs in place, AND the payload under
+> orchestrator (`deploy_brain.py`) runs in place, AND the payload under
 > `factory/source/system/**` is **copied from the source tree at deploy time** — so a source
 > edit anywhere in this repo is live on the next `deploy`. See **"How a source edit reaches a
 > brain"** in [`DEPLOYMENT.md`](../factory/source/system/brain_bin/DEPLOYMENT.md) (§0).

@@ -46,15 +46,11 @@ You run one **orchestrator** per host OS; it sequences every step (OS account �
 gateway → residency) into a single converging `deploy`, and its inverse:
 
 ```bash
-# Windows / WSL2 — from an elevated shell:
-python windows_deploy_brain.py deploy   --brain mybrain --install-root C:\brains --posture personal
-python windows_deploy_brain.py verify   --brain mybrain
-python windows_deploy_brain.py status   --brain mybrain
-python windows_deploy_brain.py teardown --brain mybrain [--purge --yes]
-
-# Native Linux — with sudo:
-sudo python3 linux_deploy_brain.py deploy   --brain mybrain --install-root /srv/brains --posture personal
-sudo python3 linux_deploy_brain.py teardown --brain mybrain [--purge --yes]
+# Cross-platform — from an elevated shell (Windows) or with sudo (Linux):
+python deploy_brain.py deploy   --brain mybrain --install-root <dir> --posture personal
+python deploy_brain.py verify   --brain mybrain
+python deploy_brain.py status   --brain mybrain
+python deploy_brain.py teardown --brain mybrain [--purge --yes]
 ```
 `--posture personal` binds the gateway to the host loopback only; `--posture server` exposes it on the
 LAN (see the security model before you do). A plain `deploy` re-stages code onto an existing brain;
@@ -85,8 +81,8 @@ explicit-or-die. **The `aios/` wrapper is the _only_ place that is allowed to kn
 README.md                     ← you are here (the front door)
 VERSION                       ← package version (semver); the installer reads it
 LICENSE                       ← AGPL-3.0
-windows_deploy_brain.py       ← Windows/WSL2 deploy orchestrator (host-side; run elevated)
-linux_deploy_brain.py         ← native-Linux deploy orchestrator (systemd + rootless Docker; run with sudo)
+deploy_brain.py               ← cross-platform deploy orchestrator (Windows/WSL2 run elevated; native Linux run with sudo)
+linux_deploy_brain.py         ← retained legacy Linux orchestrator (kept for an internal tool that imports it; not the way to deploy)
 factory/                      ← build tooling + brain image (dir keeps its historical name; the deploy staging root)
   create_brain.py             ← standalone brain-provisioning provider (OS account/group/ACL/keyring)
   source/                     ← THE BRAIN IMAGE: exactly the tree a deployed brain gets (copied at deploy)

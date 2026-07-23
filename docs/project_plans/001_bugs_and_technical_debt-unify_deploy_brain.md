@@ -55,10 +55,15 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
 1. **Decision/context:** `brain_doctor.py` already dispatches per-OS, but its residency/seam/stack
    probes assume the current per-driver artifact names. If unification changes any (unit name, seam
    path, engine layout), the doctor's checks drift.
-2. **Action needed:** re-verify `brain_doctor diagnose` against a brain deployed by `deploy_brain.py`
-   (Section 8) and adjust probes if needed.
-3. **Impact:** LOW-MEDIUM — stale probes mis-report health, not a runtime break.
-4. **Status:** OPEN → cleared at Section 8 validation.
+2. **Action needed:** (a) re-verify `brain_doctor diagnose` against a brain deployed by `deploy_brain.py`
+   (Section 8) and adjust probes if needed; (b) **rewire `brain_doctor.py`'s LinuxBackend** to import
+   `deploy_brain` instead of `linux_deploy_brain` and map its primitive calls (`ldb.as_brain`/`ldb.brain_sh`)
+   onto the trunk's names (`run_as_brain_argv`/`_brain_sh`) — this is the LAST blocker to DELETING
+   `linux_deploy_brain.py` (Section 7). The WindowsBackend is already repointed to `deploy_brain`.
+3. **Impact:** LOW-MEDIUM — stale probes mis-report health; the lingering driver is a dead file kept only
+   for the doctor's Linux import (deploy no longer uses it).
+4. **Status:** OPEN → (a) cleared at Section 8 validation; (b) do the LinuxBackend rewire, then
+   `git rm linux_deploy_brain.py` to finish Section 7.
 
 ## DEBT-001-4 — Linux engine build runs as the real brain account, not an isolated build user
 1. **Decision/context:** Windows `build_engine` runs in a throwaway scratch distro, so the build never
