@@ -2278,7 +2278,95 @@ def _verify_linux(args):
         if "enabled" not in (out or ""):
             die(f"VERIFY FAILED — {stack_service(brain)}.service is not enabled (boot persistence).")
         ok("residency verified (linger on + stack unit enabled)")
+
+    # --- Neuron liveness (DEBT-001-1b) --------------------------------------------------------
+    # Only when this brain HAS neuron source (the neuron stage skips scaffold-only brains). Use
+    # `docker ps -a` — a crashed neuron is not in plain `ps`. Input + CLI action neurons are
+    # ONE-SHOT jobs that legitimately Exited(0); only the API neuron is long-running. Exited(0)
+    # or running = SUCCESS; a NON-ZERO exit is fatal (dead ingest/query side). Mirrors the
+    # Windows verify's neuron check (containers are named <brain>-<service>, e.g.
+    # dev_brain-input_neuron_example).
+    have_neuron = ((brain_dir / "system" / "common_neuron_platform" / "input"  / "Dockerfile").is_file()
+                   or (brain_dir / "system" / "common_neuron_platform" / "action" / "Dockerfile").is_file())
+    if have_neuron:
+        _, out, _ = _brain_sh(brain, "docker ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null")
+        rows = [l.strip() for l in (out or "").splitlines() if "|" in l]
+        neurons = [r for r in rows
+                   if r.split("|", 1)[0].startswith(f"{brain}-") and "neuron" in r.split("|", 1)[0]]
+        if not neurons:
+            die("VERIFY FAILED — neuron source is present but no neuron container exists; the "
+                "neuron bring-up stage did not start the bundle (ingest/query side is absent).")
+        dead = []
+        for r in neurons:
+            name, status = (x.strip() for x in r.split("|", 1))
+            m = re.match(r"Exited \((\d+)\)", status)
+            if m and m.group(1) != "0":
+                dead.append(f"{name} [{status}]")
+        if dead:
+            die("VERIFY FAILED — neuron container(s) exited non-zero:\n    " + "\n    ".join(dead)
+                + "\n    The bundle is dead (ingest/query side down). Inspect as the brain: "
+                  "docker logs <name>.")
+        ok(f"neuron bundle(s) healthy: {len(neurons)} container(s) — "
+           + ", ".join(sorted(r.split('|', 1)[0] for r in neurons)))
+
     ok("VERIFY PASSED")
+
+
+def _neuron_bundles_linux(args):
+    """Start the neuron bundle on Linux (DEBT-001-1b). The from-scratch build already BUILT the
+    ${brain}-{input,action}_neurons images and gateway_config rendered the neuron compose services
+    behind the `neurons` profile — but nothing STARTED them, so a Linux brain came up with only the
+    base RAG stack. Mirrors the Windows neuron_bundles() MINUS the WSL drvfs code-seam mount (not
+    needed on Linux: the images built from the brain tree directly):
+      1. Scaffold-only brain (no neuron Dockerfile) -> skip; the base stack still serves.
+      2. Deliver the input-side DATA seams (impulses/ + knowledge/brain_ro) onto the real fs the
+         neuron containers bind-mount — the input neuron ingests at startup. _deliver_data_seams is
+         already Linux-aware (copy-merge into the brain home + chown; no 9p/drvfs dance).
+      3. Activate the `neurons` profile in ~/docker/.env (idempotent). Driving it from .env — not a
+         CLI `--profile`, which REPLACES rather than merges COMPOSE_PROFILES — means the profile is
+         live for this `up`, the seam-apply recreate, AND the residency unit's boot
+         `docker compose up -d` (boot persistence for free, no unit-template change).
+      4. `docker compose up -d --pull never` AS THE BRAIN: the base stack is already up, so this
+         only starts the neuron services from their PRE-BAKED images (never builds/pulls at runtime;
+         the neuron Dockerfiles need network the runtime does not have). Liveness (a neuron that
+         starts then exits non-zero) is asserted by _verify_linux."""
+    brain = args.brain
+    _, brain_dir = brain_paths(args)
+    have_input  = (brain_dir / "system" / "common_neuron_platform" / "input"  / "Dockerfile").is_file()
+    have_action = (brain_dir / "system" / "common_neuron_platform" / "action" / "Dockerfile").is_file()
+    if not (have_input or have_action):
+        info("neuron source is a TEMPLATE SCAFFOLD (no common_neuron_platform/{input,action}/Dockerfile) "
+             "— skipping neuron bring-up. The base RAG stack runs; no neuron bundle starts until real "
+             "neuron code is present. EXPECTED for a bare factory deploy.")
+        return
+
+    # 1. Deliver the input-side DATA seams onto the real fs the neuron containers bind-mount.
+    _deliver_data_seams(args, brain_dir, None)
+
+    # 2. Activate the `neurons` profile in the runtime .env (idempotent, comma-list aware).
+    add_profile = r'''cd ~/docker || exit 1
+if grep -qE '^COMPOSE_PROFILES=' .env 2>/dev/null; then
+  cur=$(grep -m1 -E '^COMPOSE_PROFILES=' .env | cut -d= -f2-)
+  case ",$cur," in
+    *,neurons,*) : ;;
+    *) [ -n "$cur" ] && new="$cur,neurons" || new="neurons"
+       sed -i "s/^COMPOSE_PROFILES=.*/COMPOSE_PROFILES=$new/" .env ;;
+  esac
+else
+  echo "COMPOSE_PROFILES=neurons" >> .env
+fi'''
+    rc, out, e = _brain_sh(brain, add_profile)
+    if rc != 0:
+        die(f"neuron bring-up: could not add the 'neurons' profile to ~/docker/.env (rc={rc}).\n{out}{e}")
+
+    # 3. Bring the bundle up from the PRE-BAKED images (never build/pull at runtime).
+    rc, out, e = _brain_sh(brain, "cd ~/docker && docker compose up -d --pull never")
+    if rc != 0:
+        die(f"neuron bundle up failed (rc={rc}) — this brain has neuron source, so the bundle is "
+            f"expected to start. The base stack is up but its ingest/query side is not.\n{out}{e}")
+    which = ", ".join(t for t, h in (("input_neurons", have_input), ("action_neurons", have_action)) if h)
+    ok(f"neuron bundle started from baked images (profile 'neurons' active; {which}) — "
+       "liveness asserted at verify")
 
 
 def _cmd_deploy_linux(args):
@@ -2294,7 +2382,7 @@ def _cmd_deploy_linux(args):
     banner(f"Deploy brain (Linux): {args.brain}  (posture={args.posture})")
     _root, _ = brain_paths(args)
     os.environ[INSTALL_ROOT_ENV] = str(_root)
-    total = 10 if not args.skip_gateway else 6
+    total = 11 if not args.skip_gateway else 6
     stage(1, total, "Preflight");                                  _preflight_linux(args)
     stage(2, total, "Create brain");                               _create_brain_linux(args)
     stage(3, total, "Stage code (source/ -> brain)");              stage_package(args)
@@ -2304,12 +2392,13 @@ def _cmd_deploy_linux(args):
     if not args.skip_gateway:
         stage(7, total, "Config-exposure seam");                   _seam_linux(args)
         stage(8, total, "Gateway (port + token)");                 _gateway_linux(args)
-        stage(9, total, "Residency (systemd + linger)")
+        stage(9, total, "Neuron bundles");                         _neuron_bundles_linux(args)
+        stage(10, total, "Residency (systemd + linger)")
         if not getattr(args, "skip_residency", False):
             _residency_linux(args)
         else:
             info("--skip-residency: stack up; boot persistence NOT wired")
-        stage(10, total, "Verify");                                _verify_linux(args)
+        stage(11, total, "Verify");                                _verify_linux(args)
     else:
         info("--skip-gateway: runtime provisioned + engine loaded; gateway/residency/verify skipped")
     banner(f"DEPLOY COMPLETE: {args.brain}")

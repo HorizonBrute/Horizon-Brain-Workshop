@@ -223,14 +223,25 @@ class LinuxBackend:
             if not rows:
                 rep.add("FAIL", "containers", "none running (stack is down)")
             else:
-                running = [s for s, st, _ in rows if st == "running"]
-                down    = [(s, st) for s, st, _ in rows if st != "running"]
+                # Input + CLI action neurons are ONE-SHOT jobs that Exit(0) when their work is
+                # done — SUCCESS, not "down". Only a NON-ZERO exit (or any non-neuron that is not
+                # running) counts against health. Mirrors the deploy verify's neuron liveness rule.
+                def _oneshot_done(svc, status):
+                    return "neuron" in svc and re.match(r"Exited \(0\)", status.strip())
+                running   = [s for s, st, _ in rows if st == "running"]
+                completed = [s for s, st, stat in rows if st != "running" and _oneshot_done(s, stat)]
+                down      = [(s, st) for s, st, stat in rows
+                             if st != "running" and not _oneshot_done(s, stat)]
+                detail = f"{len(running)}/{len(rows)} running"
+                if running:
+                    detail += f": {', '.join(running)}"
+                if completed:
+                    detail += f"; {len(completed)} one-shot done: {', '.join(sorted(completed))}"
                 if not down:
-                    rep.add("OK", "containers", f"{len(running)}/{len(rows)} running: {', '.join(running)}")
+                    rep.add("OK", "containers", detail)
                 else:
                     rep.add("WARN", "containers",
-                            f"{len(running)}/{len(rows)} running; down: "
-                            + ", ".join(f"{s}({st})" for s, st in down))
+                            detail + "; down: " + ", ".join(f"{s}({st})" for s, st in down))
         else:
             rep.add("INFO", "containers", "skipped (daemon down)")
 

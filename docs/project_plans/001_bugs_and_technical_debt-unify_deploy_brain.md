@@ -178,11 +178,22 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    or starts neuron bundles.
 2. **Action needed:** the unified `deploy()` (Section 4) must include both stages for both OSes.
 3. **Impact:** MEDIUM — a Linux brain's `/ask` 404s until models are pulled; neurons never run.
-4. **Status:** PARTIALLY CLOSED (Section 4). **Models: CLOSED** — `_build_engine_linux` seeds the ollama
+4. **Status:** ✅ **CLOSED (2026-07-23).** **Models: CLOSED** — `_build_engine_linux` seeds the ollama
    roster into the volume at build and `_deploy_engine_linux` restores it, so a Linux brain ships with
-   its models (net-new; the old driver seeded none). **Neurons: STILL OPEN** — `_cmd_deploy_linux` builds
-   neuron images into the engine but does not yet START them (no neuron-bundle bring-up / data-seam
-   delivery stage on Linux, matching the old driver). Deferred to a follow-up neuron stage; tracked here.
+   its models (net-new; the old driver seeded none). **Neurons (DEBT-001-1b): NOW CLOSED** — added
+   `_neuron_bundles_linux` as deploy stage 9 (renumber → 11 stages): scaffold-guard → `_deliver_data_seams`
+   (already Linux-aware: copies impulses/ + knowledge/brain_ro into the brain home, chowns) → add
+   `neurons` to `~/docker/.env` `COMPOSE_PROFILES` (idempotent — this also makes the residency unit's boot
+   `docker compose up -d` start neurons, so persistence is free, no unit-template change) → `docker compose
+   up -d --pull never` from the PRE-BAKED images (no runtime build/pull). `_verify_linux` now asserts
+   neuron liveness (fatal only on `Exited (N≠0)`; one-shot input/CLI neurons' `Exited (0)` and the
+   long-running API neuron's `running` are healthy), mirroring the Windows verify. **`brain_doctor.py`
+   LinuxBackend made neuron-aware too** — its container probe now treats a `neuron` service that
+   `Exited (0)` as one-shot-complete, not "down" (otherwise every neuron-bearing brain false-reports
+   UNHEALTHY; relates to DEBT-001-3). **Live-validated on dev_brain:** DEPLOY COMPLETE (11/11), VERIFY
+   PASSED with "neuron bundle(s) healthy: 3 container(s)", and `brain_doctor diagnose` = HEALTHY
+   (`5/7 running … 2 one-shot done: action_neuron_cli, input_neuron_example`), `COMPOSE_PROFILES` carries
+   `neurons`.
 
 ## DEBT-001-2 — Several Windows engine-build steps have no Linux equivalent
 1. **Decision/context:** unattended-upgrades policy (`stage5_root.sh`), maintenance tools + timers
