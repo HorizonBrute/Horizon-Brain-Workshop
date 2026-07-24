@@ -202,7 +202,40 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
 2. **Action needed:** the shared build-engine (Section 2) runs these portable stage scripts on both
    OSes, closing the gap for free.
 3. **Impact:** MEDIUM — Linux brains lack auto-updates, maintenance timers, and full hardening.
-4. **Status:** OPEN → absorbed by Section 2.
+4. **Status:** ✅ **CLOSED (2026-07-24, owner decision).** Re-examined per script: `stage2b/3/5/6/7` are
+   **WSL-distro-OS provisioning** — they configure the per-brain *WSL distro's operating system*
+   (disable rootful docker in the distro, install rootless docker in the distro, apt
+   unattended-upgrades, `systemd --user` maintenance timers, harden the distro's wsl.conf/automount).
+   On Linux there is **no per-brain OS image**: the brain is a user account + rootless docker on the
+   shared host, and the "engine" is the docker artifacts (`images.tar` + `ollama_models.tar` + `cert/`),
+   which `_build_engine_linux` already captures. Running host-level apt/hardening on every brain deploy
+   would be wrong (mutating the shared host) — so these stages are **architecturally N/A on Linux**, not
+   unfinished work. **One** piece was genuinely Linux-relevant — the real-client-IP requirement behind
+   `stage3_brain.sh`'s port-driver pin (ADR-0012 §5: fail2ban can only ban an attacker if nginx logs the
+   REAL source IP). Resolved as a **fail-closed assertion**, `_assert_real_client_ip` in
+   `_provision_runtime_linux`: it inspects the brain's live rootlesskit and **refuses to deploy unless the
+   networking provably preserves the source IP** — OK on `--net=pasta` (the modern rootless default, which
+   preserves it) or `--port-driver=slirp4netns`; `die` on the masquerading `builtin` driver or anything it
+   cannot prove. (Discovered live: this host runs **pasta**, not slirp4netns — pasta already preserves the
+   IP, so an earlier "require slirp4netns" framing would have wrongly failed a correct host; the assertion
+   targets the real requirement instead.) **Live-validated on dev_brain (pasta):** assertion passes,
+   DEPLOY COMPLETE, VERIFY PASSED, brain_doctor HEALTHY. **Follow-up noted (not this item):** the shipped
+   `fail2ban jail.d/gateway.conf` `ignoreip` still hard-codes slirp4netns's `10.0.2.0/24` host range —
+   harmless under pasta (loopback + `172.16/12` cover the internal cases) but worth reconciling to pasta's
+   range if/when a server-posture Linux brain is deployed → tracked as **DEBT-001-5**.
+
+## DEBT-001-5 — fail2ban jail `ignoreip` hard-codes the slirp4netns host range (pasta hosts differ)
+1. **Decision/context:** `factory/source/system/brain_bin/gateway/fail2ban/jail.d/gateway.conf` sets
+   `ignoreip = 127.0.0.1/8 ::1 10.0.2.0/24 172.16.0.0/12`. The `10.0.2.0/24` is the **slirp4netns** host
+   range; on a **pasta** host (the modern rootless default, e.g. this Fedora 44 box) host-local/forwarded
+   traffic does not use that range. Surfaced 2026-07-24 while closing DEBT-001-2 (`_assert_real_client_ip`).
+2. **Action needed:** make the internal-exempt range posture/backend-aware (detect pasta vs slirp4netns and
+   set the correct host-local CIDR), or document the operator knob. Low urgency.
+3. **Impact:** LOW — under personal posture it is moot (loopback only). Under server posture the stale
+   `10.0.2.0/24` is merely an over-broad exemption of an unused range; loopback + `172.16/12` still cover
+   the real internal cases, so it neither blocks bans of real attackers nor exempts them.
+4. **Status:** OPEN → revisit when a server-posture Linux brain is first deployed (verify real external
+   IPs are logged + bannable under pasta, and reconcile the exempt range).
 
 ## DEBT-001-3 — brain_doctor probes must track the unified deployer's outputs
 1. **Decision/context:** `brain_doctor.py` already dispatches per-OS, but its residency/seam/stack
@@ -236,4 +269,13 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    linger + rootless daemon + teardown) to match Windows' isolation, once Linux `create-brain` (Section
    4) exists to factor the account/rootless setup out.
 3. **Impact:** LOW — a functional artifact is produced either way; this is isolation purity + parity.
-4. **Status:** OPEN → revisit after Section 4 (Linux create-brain) lands.
+4. **Status:** ❌ **CLOSED — WON'T-DO (2026-07-23, owner decision).** The real-account build already
+   produces a correct, account-independent engine artifact (docker `images.tar` + ollama-volume
+   `ollama_models.tar` + baked `cert/` under `system/linux_engine/`), live-proven across the Section 8
+   from-scratch redeploys. The throwaway-build-user isolation is optional purity that mirrors exactly the
+   WSL scratch-distro isolation the owner has determined Linux does not need (the Linux "engine" is the
+   preserved docker artifacts, not a whole OS image). The only real side-effect — the build touching the
+   real brain's rootless docker — is benign (the account is created by deploy anyway, BUG-001-5) and is
+   overwritten cleanly on each redeploy. Not worth the added `brain-build-<brain>` account lifecycle
+   (subuid/subgid + linger + rootless daemon + teardown). Reopen only if a future requirement needs the
+   build to run with zero real-account side-effects.

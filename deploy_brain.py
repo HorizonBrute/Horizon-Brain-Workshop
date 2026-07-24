@@ -1943,6 +1943,51 @@ def _ensure_engine_linux(args):
     build_engine(args)
 
 
+def _assert_real_client_ip(brain):
+    """ADR-0012 §5 (owner requirement) — the gateway's fail2ban can only ban an attacker if nginx
+    logs the attacker's REAL source IP. A rootless network that MASQUERADES the source (RootlessKit's
+    slirp4netns 'builtin' port-driver) makes every external client look like the docker-bridge
+    gateway, so bans are inert and the gateway is abusable. This ASSERTS that the brain's active
+    rootless networking provably preserves the client source IP, and REFUSES the deploy otherwise.
+    It does NOT reconfigure the daemon — the deployer must not silently rewire an operator's network
+    stack; it states the requirement and fails closed when it is unmet.
+
+      - pasta (`--net=pasta`): preserves the source IP by design → OK. This is the MODERN rootless
+        default (what supersedes the ADR-0012-era slirp4netns pin), so on a pasta host no drop-in is
+        needed and forcing slirp4netns would be a downgrade.
+      - slirp4netns port-driver (`--port-driver=slirp4netns`): preserves it → OK.
+      - the masquerading 'builtin' port-driver, or anything we cannot positively identify as
+        source-IP-preserving: DIE (better to fail than ship an abusable fail2ban).
+
+    The REST of the WSL provision stages (unattended-upgrades, maintenance timers, distro harden)
+    have NO Linux analog — the Linux engine is the docker artifacts, already captured by
+    _build_engine_linux; see DEBT-001-2."""
+    # Inspect the running rootlesskit for this brain — that is the process that publishes the
+    # gateway ports and thus decides whether the source IP survives to nginx/fail2ban.
+    _, args_out, _ = _brain_sh(brain, "ps -u \"$(id -u)\" -o args= 2>/dev/null | grep -m1 '[r]ootlesskit'")
+    line = (args_out or "").strip()
+    if not line:
+        die("real-client-IP check (ADR-0012 §5): the brain's rootlesskit process is not running — "
+            "cannot confirm fail2ban will see real client IPs. Ensure the rootless docker daemon is "
+            "up and redeploy.")
+    m_net = re.search(r"--net=(\S+)", line)
+    m_pd  = re.search(r"--port-driver=(\S+)", line)
+    net = m_net.group(1) if m_net else ""
+    pd  = m_pd.group(1) if m_pd else ""
+    if net == "pasta":
+        ok("real client IP preserved: rootless net=pasta — fail2ban will see real sources (ADR-0012 §5)")
+        return
+    if pd == "slirp4netns":
+        ok("real client IP preserved: port-driver=slirp4netns — fail2ban will see real sources (ADR-0012 §5)")
+        return
+    die("real-client-IP requirement UNMET (ADR-0012 §5) — REFUSING to deploy. The brain's rootless "
+        f"networking does not provably preserve the client source IP (net={net or '?'}, "
+        f"port-driver={pd or '?'}). The masquerading RootlessKit 'builtin' port-driver makes the "
+        "gateway's fail2ban see the docker-bridge address, not real attackers, so bans are inert and "
+        "the gateway is abusable. Fix the rootless networking — use pasta (`--net=pasta`, the modern "
+        "default) or pin RootlessKit `--port-driver=slirp4netns` — then redeploy.")
+
+
 def _provision_runtime_linux(args):
     """Rootless docker + login env + lay the gateway stack + bake the TLS cert. Ported from the
     fixed linux_deploy_brain.py provision_runtime (cert SAN fix included). Does NOT bring the
@@ -1965,6 +2010,11 @@ def _provision_runtime_linux(args):
         if not _linux_docker_ready(brain):
             die("rootless Docker did not come up as the brain after setup.")
         ok("rootless Docker installed + running as the brain")
+
+    # 1b. Assert the rootless networking preserves the real client IP (ADR-0012 §5 — the one
+    #     native-Linux-relevant requirement from the WSL provision stages; fail closed if the
+    #     source IP would be masqueraded, so the gateway's fail2ban is never abusable). DEBT-001-2.
+    _assert_real_client_ip(brain)
 
     # 2. DOCKER_HOST into ~/.bashrc (idempotent)
     _, uid, _ = _brain_sh(brain, "id -u"); uid = (uid or "").strip()
