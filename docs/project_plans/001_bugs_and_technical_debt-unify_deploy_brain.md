@@ -43,6 +43,20 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    (`loginctl terminate-user` + `systemctl stop user@<uid>`), force-reaps stragglers (`pkill -KILL -u`),
    runs `userdel` with an rc check + one forced retry, and **verifies** both the account (`user_exists`)
    and the folder are actually gone — `die()`ing with a diagnostic otherwise. Compile-clean.
+## BUG-001-3 — Linux deploy stage 3 crashes: Windows `icacls` invoked on Linux
+1. **Observed:** 2026-07-23, first live Section 8 (after BUG-001-2 cleared). `deploy … --from-scratch`
+   reached `[3/10] Stage code` then died: `FileNotFoundError` from `subprocess.run(["icacls", …])` in
+   `_icacls_or_die` ← `_repair_staged_acls` ← `_stage_from_source`.
+2. **Root cause:** `stage_package`/`_stage_from_source` is shared by both OSes, but line 1299 called the
+   Windows-only ACL repair (`_repair_staged_acls`, which shells out to `icacls`) unconditionally. Linux
+   has no `icacls`, and the copytree ran as root so the staged tree was left `root:root` — the brain
+   (which runs via `sudo -u <brain>`) could not own/write its own code.
+3. **Severity/priority:** HIGH — blocks every Linux deploy at stage 3. Must clear before close.
+4. **Status:** FIXED (2026-07-23) — `_stage_from_source` now branches: `_repair_staged_acls` only on
+   `_IS_WINDOWS`; on Linux it `chown -R <brain>:<brain>` the staged tree (the POSIX analog). Safe because
+   `_provision_runtime_linux` (stage 5, after staging) re-locks `brain_etc` to `root:root` for the seam.
+   Compile-clean; live-validated at the Section 8 re-run.
+
 ## DEBT-001-1 — Linux deploy is missing the ollama_models and neuron_bundles stages
 1. **Decision/context:** `linux_deploy_brain.py cmd_deploy` (8 stages) has no `ollama_models` and no
    `neuron_bundles` stage; Windows has both (stages 8–9). A Linux brain never syncs its model roster

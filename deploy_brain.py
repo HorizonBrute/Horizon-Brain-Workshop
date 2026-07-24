@@ -1296,7 +1296,16 @@ def _stage_from_source(brain_dir):
             "deploy.")
     shutil.copytree(SOURCE_ROOT, brain_dir, ignore=_make_stage_ignore(brain_dir),
                     dirs_exist_ok=True)
-    _repair_staged_acls(brain_dir, _reset_targets(brain_dir))
+    if _IS_WINDOWS:
+        _repair_staged_acls(brain_dir, _reset_targets(brain_dir))
+    else:
+        # Linux analog of the Windows ACL repair (`icacls` is Windows-only). copytree ran as
+        # root, so the staged tree is root:root and the brain — which runs via `sudo -u <brain>`
+        # — cannot own or write its own code. Hand the staged tree to the brain. The
+        # config-exposure seam (brain_etc) is deliberately re-locked to root:root at stage 5
+        # (_provision_runtime_linux), which runs after this, so this broad chown is safe.
+        brain = Path(brain_dir).name
+        run(["chown", "-R", f"{brain}:{brain}", str(brain_dir)])
     ok(f"code staged into {brain_dir} from {SOURCE_ROOT} — one-to-one copy of source/, "
        "no tarball, no build step")
 
