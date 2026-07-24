@@ -35,12 +35,19 @@ identity helper (`run_as_brain_argv`). Landed + pushed:
 - **S4/5/6** full Linux deploy (`_cmd_deploy_linux`: preflight/create/provision/seam/gateway/residency/verify) + engine restore (`docker load` + volume restore → `compose --pull never`); CLI parity; cert contract (server-SAN-all-global-IPv4) in both paths. Ported faithfully from the FIXED `linux_deploy_brain.py` (NOTE 001-8).
 - **S7** rename done; `brain_doctor` Windows import repointed; doc sweep done.
 Everything compiles and every Linux command sequence is asserted via stubbed-run harnesses.
-**Remaining:** Only DEBT items. **S8 live validation — ✅ PASSED 2026-07-23** (NOTE 001-10): supervised
-`teardown --purge` + `deploy --from-scratch` of dev_brain completed all 10 stages → VERIFY PASSED, and the
-rewired `brain_doctor diagnose` = HEALTHY. First-live fixed 7 defects (BUG-001-2…7, all pushed).
-DEBT-001-3 fully closed. **S7 (delete `linux_deploy_brain.py`) DONE** (DEBT-001-3b / NOTE 001-9).
-Recommended next: **DEBT-001-1b** — neuron bring-up on Linux (images build; containers not started yet).
-Then DEBT-001-2 (portable engine-build stages), DEBT-001-4 (throwaway build user). Sections 1–8 done.
+**Status: ✅ COMPLETE — Sections 1–8 done, ALL debt resolved (2026-07-24). Ready to close.**
+**S8 live validation — PASSED** (NOTE 001-10): supervised `teardown --purge` + `deploy --from-scratch` of
+dev_brain, all 11 stages → VERIFY PASSED, rewired `brain_doctor diagnose` = HEALTHY. First-live fixed
+**8 defects** (BUG-001-1…8, all pushed). Debt ledger, all closed:
+- **DEBT-001-1** (models + neurons): CLOSED — neuron bring-up on Linux (`_neuron_bundles_linux`, stage 9)
+  + neuron-aware verify & doctor. **DEBT-001-3** CLOSED (LinuxBackend rewired, `linux_deploy_brain.py`
+  deleted, live re-verify). **DEBT-001-2** CLOSED — WSL provision stages are N/A on Linux (engine = docker
+  artifacts); the one Linux-relevant piece (real client IP / fail2ban, ADR-0012 §5) is a fail-closed
+  assertion `_assert_real_client_ip` (OK on pasta or slirp4netns-port-driver, die on masquerading builtin).
+  **DEBT-001-4** CLOSED won't-do (real-account build yields a correct artifact; throwaway-user isolation
+  unneeded). **DEBT-001-5** (new, deferred): fail2ban `ignoreip` slirp4netns range vs pasta — low, revisit
+  at first server-posture Linux brain.
+Nothing outstanding. Next action: `/project-plan close 001` (archive) whenever convenient.
 
 ## What to read, in order
 1. This file.
