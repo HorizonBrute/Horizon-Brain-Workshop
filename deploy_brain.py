@@ -2261,9 +2261,33 @@ def _cmd_teardown_linux(args):
         run(["ufw", "delete", "allow", f"{args.port}/tcp"], check=False)
     if destructive:
         run(["loginctl", "disable-linger", brain], check=False)
-        run(["userdel", "--remove", brain], check=False)
+        # The brain's `systemd --user` manager + rootless dockerd keep the account "in use",
+        # so a bare `userdel` fails with "currently used by process N" and leaves the account
+        # behind. Tear the per-user session down first, then reap any stragglers, so userdel
+        # can actually succeed.
+        run(["loginctl", "terminate-user", brain], check=False)
+        ucode, uid, _ = run_out(["id", "-u", brain])
+        if ucode == 0 and uid.strip():
+            run(["systemctl", "stop", f"user@{uid.strip()}.service"], check=False)
+        for _ in range(5):
+            if run_out(["pgrep", "-u", brain])[0] != 0:
+                break                                  # no processes left as the brain
+            run(["pkill", "-KILL", "-u", brain], check=False)
+            time.sleep(1)
+        rc, out, err = run_out(["userdel", "--remove", brain])
+        if rc != 0 and user_exists(brain):             # one forced sweep + retry
+            run(["pkill", "-KILL", "-u", brain], check=False)
+            time.sleep(1)
+            rc, out, err = run_out(["userdel", "--remove", brain])
         if brain_dir.is_dir():
             shutil.rmtree(brain_dir, ignore_errors=True)
+        # Verify — never report a purge we did not actually perform (false-green guard).
+        if user_exists(brain):
+            die(f"userdel FAILED (rc={rc}) — account '{brain}' is still present.\n"
+                f"    {(err or out).strip() or 'a process may still hold the account'}\n"
+                f"    Inspect: ps -u {brain}   then re-run: teardown --purge --yes")
+        if brain_dir.is_dir():
+            die(f"brain folder still present after purge: {brain_dir}")
         ok("account + home + brains/<brain> purged")
     else:
         info("non-destructive teardown: account, home, images, ollama volume, and brain_etc SURVIVE "

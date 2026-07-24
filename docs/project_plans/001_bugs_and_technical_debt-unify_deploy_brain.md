@@ -30,6 +30,19 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    `linux_deploy_brain.py:576` deliberately left unpatched (NOTE 001-3) — that driver is being retired.
    (Supersedes the earlier fix in the discarded clean-room `deploy_brain.py`, per NOTE 001-4.)
 
+## BUG-001-2 — Linux `teardown --purge` false-greens when userdel fails (account not removed)
+1. **Observed:** 2026-07-23, first live Section 8. `deploy_brain.py teardown --brain dev_brain --purge --yes`
+   printed `[OK] account + home + brains/<brain> purged` and exited 0, but the account survived:
+   `userdel: user dev_brain is currently used by process 1256`.
+2. **Root cause:** `_cmd_teardown_linux` ran `userdel --remove` with `check=False` and then printed the
+   "purged" OK line unconditionally — no rc check, no post-verify. The brain's `systemd --user` manager
+   (kept alive by linger) still held the account, so `userdel` refused; the false-green hid it.
+3. **Severity/priority:** MEDIUM — teardown reports success while leaving the account behind; a following
+   redeploy then collides with a half-removed brain. Must be clear before close.
+4. **Status:** FIXED (2026-07-23) — purge now tears the per-user session down first
+   (`loginctl terminate-user` + `systemctl stop user@<uid>`), force-reaps stragglers (`pkill -KILL -u`),
+   runs `userdel` with an rc check + one forced retry, and **verifies** both the account (`user_exists`)
+   and the folder are actually gone — `die()`ing with a diagnostic otherwise. Compile-clean.
 ## DEBT-001-1 — Linux deploy is missing the ollama_models and neuron_bundles stages
 1. **Decision/context:** `linux_deploy_brain.py cmd_deploy` (8 stages) has no `ollama_models` and no
    `neuron_bundles` stage; Windows has both (stages 8–9). A Linux brain never syncs its model roster
