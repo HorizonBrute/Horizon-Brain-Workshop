@@ -1739,8 +1739,9 @@ def _build_engine_linux(args):
     _ensure_linux_build_runtime(args)
     run(["mkdir", "-p", str(eng_dir)], check=True)
 
-    # Build-scoped user-defined network for every CONTAINER-executed build step (ollama model
-    # pull, neuron RUN steps). Rootless Docker's DEFAULT bridge has no embedded DNS, so the
+    # Build-scoped user-defined network for the ollama-seed CONTAINER's model pull. (The neuron
+    # `docker build` can't use this — BuildKit rejects custom networks — so it uses --network=host
+    # instead; see BUG-001-6.) Rootless Docker's DEFAULT bridge has no embedded DNS, so the
     # container would try plaintext UDP/53 directly — which this host BLOCKS by design (encrypted
     # DNS is a hardening control). A user-defined network gives containers Docker's embedded
     # resolver (127.0.0.11), which forwards via the DAEMON's host-side resolver (the host's
@@ -1782,7 +1783,12 @@ def _build_engine_linux(args):
     neuron_imgs = []
     if have_neuron:
         for tag, ctx in ((f"{brain}-input_neurons", in_ctx), (f"{brain}-action_neurons", act_ctx)):
-            _brain_docker(brain, f"docker build --pull --network {shlex.quote(seednet)} "
+            # BuildKit rejects user-defined networks (only default/none/host), so the seednet
+            # trick used for the seed CONTAINER can't apply here. Use host networking: the
+            # pip-install RUN steps then resolve via the host's own (encrypted) resolver — the
+            # only DNS path this host allows. Build-time only; the RUNTIME containers use
+            # compose's isolated neuron_net, never host. See BUG-001-6.
+            _brain_docker(brain, f"docker build --pull --network=host "
                                  f"-t {tag} {shlex.quote(str(ctx))}")
             neuron_imgs.append(tag)
         ok(f"built neuron images: {', '.join(neuron_imgs)}")

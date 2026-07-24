@@ -97,6 +97,24 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    flipped `sudo -u dev_brain` access to the neuron context from `Permission denied` → `TRAVERSE_OK`.
    Relates to DEBT-001-4 (inline v1 create vs the fuller standalone create_brain.py).
 
+## BUG-001-6 — neuron `docker build --network <custom>` rejected by BuildKit
+1. **Observed:** 2026-07-23, Section 8 (after BUG-001-5 cleared). Traversal fixed; neuron build then
+   died: `failed to build: network mode "brain-build-net-dev_brain" not supported by buildkit`.
+2. **Root cause:** BUG-001-4 added the build-scoped user-defined network to BOTH the ollama-seed
+   `docker run` (valid) and the neuron `docker build` (invalid) — **BuildKit only accepts `--network`
+   `default|none|host`**, not user-defined networks. The neuron Dockerfiles DO need build-time DNS
+   (`RUN pip install -r requirements.txt`; their own comment: "Build HAS internet; runtime does NOT"),
+   so simply dropping `--network` would fail the pip step under the encrypted-DNS control.
+3. **Severity/priority:** HIGH — blocks neuron image build on every rootless from-scratch deploy.
+4. **Status:** FIXED (2026-07-23) — the neuron `docker build` now uses `--network=host`. **Tested both
+   candidates** on the brain's rootless docker: legacy builder (`DOCKER_BUILDKIT=0`) + custom net →
+   `DNS_RESOLVED` but prints "legacy builder is deprecated"; **BuildKit + `--network=host` →
+   `DNS_RESOLVED`, exit 0** — modern and resolves via the host's own (encrypted) resolver, so it honors
+   the hardening control (plaintext-to-LAN stays blocked; a successful resolve proves the encrypted path
+   was used). Build-time only; runtime containers stay on compose's isolated `neuron_net`. The seed
+   CONTAINER keeps the more-isolated user-defined net (embedded DNS). Supersedes the neuron-build half of
+   BUG-001-4. Compile-clean; DNS path live-tested.
+
 ## DEBT-001-1 — Linux deploy is missing the ollama_models and neuron_bundles stages
 1. **Decision/context:** `linux_deploy_brain.py cmd_deploy` (8 stages) has no `ollama_models` and no
    `neuron_bundles` stage; Windows has both (stages 8–9). A Linux brain never syncs its model roster
