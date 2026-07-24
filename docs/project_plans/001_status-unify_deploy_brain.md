@@ -45,7 +45,15 @@ When a whole Section reaches `VERIFIED`, move its block into
 **Status:** DONE (2026-07-23) · **Rename DONE:** `git mv windows_deploy_brain.py deploy_brain.py`; `brain_doctor.py` WindowsBackend import repointed → `deploy_brain` (both compile). Doc/instruction reference sweep (README/INSTALL/DEPLOYMENT/TROUBLESHOOTING/onboard/package/context_pointer) done separately. **DELETION DONE (DEBT-001-3b, NOTE 001-9):** `brain_doctor.py` LinuxBackend rewired to `import deploy_brain as ldb` with the three renamed primitives mapped (`brain_sh`→`_brain_sh`, `_docker_ready`→`_linux_docker_ready`, `require_root`→`require_admin`); `linux_deploy_brain.py` `git rm`'d — no importer remains, the rogue-commit concern (NOTE 001-8) is now moot. Both files `py_compile`-clean; smoke test confirms every `ldb.*` attribute resolves on `deploy_brain`. Only Section-8 live re-verify of `brain_doctor diagnose` (DEBT-001-3a) is left.
 
 ## Section 8 — Validation: rebuild dev_brain via unified path
-**Status:** DEFERRED to user (NOTE 001-8) · dev_brain is user-handled and healthy, so no unsupervised live rebuild from the agent. Validation = a supervised `deploy_brain.py deploy` run on a Linux host (ideally a scratch brain, not live dev_brain) when the user is present. All Linux code is compile-clean + command-sequence-asserted via stubbed harnesses; Section 8 remains the only unproven-live step.
+**Status:** ✅ **PASSED (2026-07-23, supervised)** · Live `deploy_brain.py teardown --purge` + `deploy
+--from-scratch` of dev_brain on this Linux host completed all 10 stages → **VERIFY PASSED** (no-token 403 /
+reader-token 200 / reset 403, mode C sealed), and the **rewired** `brain_doctor diagnose` reports
+**HEALTHY** (4/4 containers, stack active/enabled, seam ro, gateway sealed :8443) — matching the
+pre-teardown baseline. First-live surfaced **7 real defects the harnesses could not**: BUG-001-2 (teardown
+false-green), BUG-001-3 (Windows icacls on Linux), BUG-001-4 (rootless container DNS), BUG-001-5
+(brains-group membership), BUG-001-6 (BuildKit `--network=host`), BUG-001-7 (seam config brain-readability)
+— all FIXED + pushed. Neuron IMAGES build; neuron CONTAINERS are not started (DEBT-001-1b, unchanged; the
+4/4 baseline never ran neurons). See NOTE 001-10.
 
 ---
 
@@ -111,6 +119,25 @@ Append-only, newest at the bottom. One `NOTE 001-K` per decision/update. Grep-ab
   unchanged. `git rm linux_deploy_brain.py`. Verified: both files `py_compile`-clean; a smoke test
   constructs `LinuxBackend()` and asserts every `ldb.*` attribute resolves on `deploy_brain`. Live
   re-verify of `brain_doctor diagnose` against a deploy_brain-built brain is DEBT-001-3a (Section 8).
+
+## NOTE 001-10 | 2026-07-23 | Section 8 PASSED — supervised dev_brain teardown+from-scratch redeploy
+- Status: DONE
+- Sections: 8 (also closes DEBT-001-3a)
+- Context: Supervised live run on this native-Linux host: `deploy_brain.py teardown --purge --yes` then
+  `deploy --from-scratch --posture personal --port 8000 --install-root /Horizon.AIOS`, verified with the
+  rewired `brain_doctor.py diagnose`.
+- Decision/Update: All 10 deploy stages completed → VERIFY PASSED (no-token 403 / reader 200 / reset 403,
+  mode C sealed); `brain_doctor` = HEALTHY (4/4 containers, stack active/enabled, seam ro, gateway sealed
+  :8443), matching the pre-teardown baseline. The code was compile+harness-asserted only until now; first
+  live contact surfaced **7 defects the stubbed harnesses structurally could not catch**, each fixed +
+  pushed the same session: BUG-001-2 (teardown `userdel` false-green), BUG-001-3 (Windows `icacls` on the
+  shared staging path), BUG-001-4 (rootless container DNS — user-defined net + embedded resolver, honoring
+  the host's encrypted-DNS control), BUG-001-5 (from-scratch create-brain omitted the `brains` group →
+  traversal denied), BUG-001-6 (neuron `docker build` needs `--network=host`; BuildKit rejects custom
+  nets), BUG-001-7 (stage-8-generated seam config was root:root 0660, unreadable by the brain that runs
+  `apply_brain_truths` — chgrp per-brain + g-w). Neuron IMAGES build but neuron CONTAINERS are still not
+  started (DEBT-001-1b, unchanged). Separate hardening note logged under BUG-001-7 (world-readable seam
+  mountpoint) for the owner. Project 001 is now functionally complete pending the DEBT items.
 
 ## NOTE 001-6 | 2026-07-22 | Linux build identity = the real brain account (v1); throwaway build-user is debt
 - Status: RESOLVED (this session)

@@ -176,8 +176,11 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    `_docker_ready`→`_linux_docker_ready`, `require_root`→`require_admin`); all others keep their
    names. Both files `py_compile`-clean; a smoke test confirms every `ldb.*` attribute resolves on
    `deploy_brain`. `linux_deploy_brain.py` **deleted** (`git rm`) — Section 7 complete; no importer
-   remains. (a) STILL OPEN → re-verify `brain_doctor diagnose` against a brain deployed by
-   `deploy_brain.py` at Section 8 (the live teardown/redeploy of dev_brain now in progress).
+   remains. **(a) CLEARED (2026-07-23)** → the Section 8 live teardown + from-scratch redeploy of
+   dev_brain completed (VERIFY PASSED), and the **rewired** `brain_doctor diagnose` (importing
+   `deploy_brain`) reports **HEALTHY** against that deploy_brain-built brain — 4/4 containers, stack
+   active/enabled, seam ro, gateway sealed mode C on :8443, matching the pre-teardown baseline. Probes
+   did not drift. **DEBT-001-3 fully closed.**
 
 ## DEBT-001-4 — Linux engine build runs as the real brain account, not an isolated build user
 1. **Decision/context:** Windows `build_engine` runs in a throwaway scratch distro, so the build never
