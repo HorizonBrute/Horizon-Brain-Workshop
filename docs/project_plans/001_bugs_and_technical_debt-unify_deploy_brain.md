@@ -137,7 +137,40 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
    `0600` root-only. Compile-clean.
    - **Related hardening note (NOT this bug):** the seam mountpoint `/opt/brain_truths` is `0755` and the
      stage-7 lock makes the SEEDED config world-readable — `nobody` can read those (non-secret) files.
-     Pre-existing design ("world-readable seam"); flagged for the owner, not changed here.
+     Pre-existing design ("world-readable seam"); flagged for the owner, not changed here. **Now fixed by
+     BUG-001-8.**
+
+## BUG-001-8 — config-exposure seam is world-readable (world/other-brain can read seeded config)
+1. **Observed:** 2026-07-23, hardening pass on the config-exposure seam (the "Related hardening note" left
+   open by BUG-001-7). The seam (`/opt/brain_truths`, a `bind,ro` mount of `brains/<brain>/brain_etc`) was
+   reachable by any local user: the mountpoint was `0755 root:root` (world-traversable) and the stage-7
+   `_seam_linux` brain_etc lock did `chown -R root:root` + `chmod -R u=rwX,go=rX` — the `go=rX` left the
+   SEEDED config world-readable. Verified: `sudo -u nobody cat /opt/brain_truths/docker/compose.yaml`
+   SUCCEEDED (an unrelated user could read seam files). BUG-001-7's token-bearing GENERATED files were
+   already protected (`0640`/`0600`), but the seeded template was not.
+2. **Root cause:** the seam was never scoped to the owning brain. World kept traverse (`o=rx`) on the
+   mountpoint and read (`o=r`) on every seeded file, so any local user or other brain could read one
+   brain's non-secret config.
+3. **Severity/priority:** MEDIUM — no token leak (secrets were already off-world via BUG-001-7), but a
+   least-privilege gap: one brain's config exposed to `world`/other local users/other brains.
+4. **Status:** FIXED (2026-07-23) — the seam is now reachable ONLY by root + the owning **per-brain group**
+   (same name as the brain), never world. Two changes in `_seam_linux`:
+   - **Mountpoint** `/opt/brain_truths` → `0750 root:<brain>` (only root + brain-group may traverse). Set
+     right after the mkdir; because a live `bind,ro` mount is read-only, an idempotent redeploy stops the
+     active `opt-brain_truths.mount` first, sets the underlying perms, then `enable --now` remounts.
+   - **Stage-7 brain_etc lock** → owner stays root, group = per-brain group, world dropped:
+     `chown -R root:<brain>` + `chmod -R u=rwX,g=rX,o=` (was `root:root` + `go=rX`). Seeded dirs become
+     `0750 root:<brain>`, files `0640 root:<brain>`.
+   This composes cleanly with BUG-001-7's later `chgrp -R <brain>` + `chmod -R g-w` (no regression): seeded
+   files are already `0640 root:<brain>` so `g-w` is a no-op on them; generated `0660` files still resolve
+   to `0640 root:<brain>` (brain reads, tokens off world); `token_registry` stays `0600` root-only.
+   **Live-validated on the running dev_brain (install-root `/Horizon.AIOS`)** after a full
+   `deploy --from-scratch` re-run (DEPLOY COMPLETE): `brain_doctor diagnose` = **HEALTHY** (4/4 containers,
+   seam ro, gateway sealed mode C on :8443); `sudo -u nobody cat /opt/brain_truths/docker/compose.yaml`
+   **DENIED**; all **26/26** sources in `wsl/apply.manifest` still readable by `sudo -u dev_brain`; brain
+   still **cannot write** the seam (`touch` denied); mountpoint = `drwxr-x--- root:dev_brain`;
+   `token_registry` still `0600 root:dev_brain` (`nobody` denied). Cross-refs BUG-001-7's Related hardening
+   note. Compile-clean.
 
 ## DEBT-001-1 — Linux deploy is missing the ollama_models and neuron_bundles stages
 1. **Decision/context:** `linux_deploy_brain.py cmd_deploy` (8 stages) has no `ollama_models` and no

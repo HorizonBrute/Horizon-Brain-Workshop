@@ -2084,11 +2084,27 @@ def _seam_linux(args):
         shutil.rmtree(example, ignore_errors=True)
         ok("brain_etc.example/ template removed post-seed")
 
-    run(["chown", "-R", "root:root", str(etc)])
-    run(["chmod", "-R", "u=rwX,go=rX", str(etc)])
-    ok("brain_etc/ perms locked (root:root, world-readable, no write)")
+    # BUG-001-8: the seam must be reachable ONLY by root + the owning brain's per-brain group,
+    # never by world/other local users/other brains. Owner stays root (seam read-only to the
+    # brain); group = the per-brain group (same name as the brain), which may READ; world gets
+    # NO bits (drop the old `o` from go=rX). This composes cleanly with BUG-001-7's later
+    # chgrp/g-w in _gateway_linux: seeded files are already 0640 root:<brain> here, so g-w is a
+    # no-op on them, and the token-bearing GENERATED files keep their 0640/0600 (tokens off
+    # world). See BUG-001-7's related hardening note.
+    run(["chown", "-R", f"root:{brain}", str(etc)])
+    run(["chmod", "-R", "u=rwX,g=rX,o=", str(etc)])
+    ok(f"brain_etc/ perms locked (root:{brain}, brain-group read-only, world denied)")
 
+    # Mountpoint itself locked so it is non-world-traversable even when the seam is unmounted:
+    # 0750 root:<brain> (only root + the brain-group may traverse into /opt/brain_truths). The
+    # underlying dir is only settable while unmounted (a live bind,ro mount is read-only), so on
+    # an idempotent redeploy stop any active seam mount first; the enable --now below remounts it.
     Path(MOUNT_POINT).mkdir(parents=True, exist_ok=True)
+    rc, opts, _ = run_out(["findmnt", "-no", "OPTIONS", MOUNT_POINT])
+    if rc == 0 and opts:
+        run(["systemctl", "stop", seam_mount_unit()], check=False)
+    run(["chown", f"root:{brain}", MOUNT_POINT])
+    run(["chmod", "0750", MOUNT_POINT])
     unit_path = Path("/etc/systemd/system") / seam_mount_unit()
     unit = (
         "[Unit]\n"
