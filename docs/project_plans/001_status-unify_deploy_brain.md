@@ -1,204 +1,51 @@
 ---
 type: project_plan
 title: "Project 001 — Unify the brain deployer (Status)"
-description: Live per-item status for Project 001, plus serialized objective notes and mini-decisions.
+description: Live per-item status for Project 001. CLOSED 2026-07-24 — see the closeout NOTE 001-11.
 tags: [project-plan, status, deployer]
 timestamp: 2026-07-21
-status: draft
+status: closed
 ---
 
-# Project 001 — Status
+# Project 001 — Status  ·  ✅ CLOSED 2026-07-24
 
 Plan detail: `001_detail-unify_deploy_brain.md`.
 Orientation (read this instead of a handoff): `001_current_orientation-unify_deploy_brain.md`.
+**Archived work-item blocks + full decision log (NOTE 001-1…10):** `001_status_archive-unify_deploy_brain.md`.
+**Bugs & tech debt (BUG-001-1…8, DEBT-001-1…5):** `001_bugs_and_technical_debt-unify_deploy_brain.md`.
 
-**Status legend:** `NOT STARTED` · `IN PROGRESS` · `BLOCKED` · `DONE` · `VERIFIED`.
-When a whole Section reaches `VERIFIED`, move its block into
-`001_status_archive-unify_deploy_brain.md` and leave a one-line stub.
+**Status legend:** `NOT STARTED` · `IN PROGRESS` · `BLOCKED` · `DONE` · `VERIFIED` · `DROPPED`.
 
----
-
-> **PIVOT (NOTE 001-4):** the plan now extends `windows_deploy_brain.py` in place. The prior
-> "DONE" work lived in a clean-room `deploy_brain.py` that is being **discarded** — those sections are
-> reset to the trunk framing. What survives is the *knowledge* (the OS-forced touchpoint list and the
-> cert rc-guard contract), not that file's code.
-
-## Section 1 — Platform switch inside the trunk
-**Status:** IN PROGRESS · Landed in `windows_deploy_brain.py`: (a) platform seam foundation — `_IS_WINDOWS`/`_IS_LINUX`, `require_supported_os()` (honest macOS refusal, wired into `main`), `require_admin()`→Linux `os.geteuid()==0`; (b) **identity-switch helper** `run_as_brain_argv(path, brain, cmd, *, wsl, root)` — Windows reproduces the staged-bridge argv byte-for-byte (asserted), Linux emits `sudo -u <brain> -H bash -lc <cmd>`, and `root=True` is REFUSED on Linux (no analog — Section 4 seam). Converted ALL pure "run-as-brain" identity sites to the helper: `_probe_gateway`, the 6 `verify()` curl/docker probes, and the neuron-compose `up`. Also landed the two remaining Section-1 platform branches: `_deliver_data_seams` now has a real Linux branch (root `cp -r` merge + `chown` directly — no drvfs dance; `run_as_brain_argv(root=True)` refused on Linux by design), and `user_exists()` branches to `id <brain>` on Linux. Compiles; helper contract asserted on both platform branches (incl. root argv byte-for-byte). **Section 1 identity work COMPLETE.** Two `run_as_brain` sites remain but are NOT identity concerns — they belong to other sections: `distro_imported_as_brain` (a WSL boot-gate = engine-host, **Section 3**) and `cmd_teardown`'s account-target WSL-verb call (**Section 7**, Linux teardown is `userdel`/`rm`). Next OS-forced concept: engine-host + snapshot (Section 2/3).
-
-## Section 2 — Fold Linux path into trunk `build_engine`
-**Status:** IN PROGRESS · `build_engine()` now dispatches to `_build_engine_linux(args)` on Linux (Windows `wsl --export` path untouched). `_build_engine_linux` runs as the real brain account (NOTE 001-6) and does the 6-stage native build: ensure rootless-docker runtime → pull runtime images (`_runtime_image_refs`) → **seed ollama models into `<brain>_ollama_models`** (NET-NEW, via a throwaway seed container) → build neuron images (if Dockerfiles present) → bake cert (no-arg gen-cert, fixes BUG-001-1) → snapshot. Reuses the OS-portable `_runtime_image_refs`/`_runtime_model_roster` verbatim. Command sequence asserted via compile + stubbed-run harness; dry-run short-circuits. **Live-validated at Section 8.** Remaining: v1 requires the brain account to pre-exist (Linux create-brain = Section 4, DEBT-001-4).
-
-## Section 3 — Linux engine artifact
-**Status:** IN PROGRESS · Layout landed (NOTE 001-7): `system/linux_engine/{images.tar (docker save of runtime+neuron images), ollama_models.tar (volume tar), cert/{cert.pem,cert.key}}` + `linux_engine_dir()` helper. Producer side done in `_build_engine_linux` (brain writes tars to its home, root relocates into `linux_engine/`). **Resolved:** engine = `docker save` images + ollama-volume tar + cert bundle (NOTE 001-1). Remaining: the CONSUME side — `ensure_engine`/`deploy_engine` Linux branches (`docker load` + volume restore + cert place) land with Section 4's deploy stages.
-
-## Section 4 — Fold Linux branches into trunk `cmd_deploy`
-**Status:** DONE (compile + asserted; live-validate at Section 8) · `cmd_deploy`/`cmd_teardown`/`cmd_verify`/`cmd_status` dispatch to `_cmd_deploy_linux`/`_cmd_teardown_linux`/`_verify_linux`/`_cmd_status_linux` on Linux (Windows bodies untouched — asserted). Faithful port of the FIXED `linux_deploy_brain.py` (NOTE 001-8): `_preflight_linux`, `_create_brain_linux` (useradd + subuid/subgid + linger), `_provision_runtime_linux` (rootless docker + ~/.bashrc env + lay stack + cert with the server-SAN-all-global-IPv4 fix), `_seam_linux` (bind,ro `opt-brain_truths.mount`), `_gateway_linux` (port/bind .env + bootstrap/neuron tokens + gateway_config + manifest + apply → `compose up --pull never`), `_residency_linux` (`<brain>-docker-stack.service` + linger), `_verify_linux` (no-token 403 / reader 200 / reset 403 / persistence, chroma-port fix). NEW engine wiring: `_ensure_engine_linux` (reuse/build) + `_deploy_engine_linux` (`docker load` images + restore ollama volume) so deploy is offline (`--pull never`). Reuses shared trunk helpers (brain_paths, stage_package, token model). Full command sequence asserted via stubbed-run harness (gen-cert has NO posture word; docker load; volume restore; mount unit; compose --pull never; residency; verify on CHROMA_PORT). Neuron bring-up still deferred (DEBT-001-1).
-
-## Section 5 — CLI parity on the trunk
-**Status:** DONE · The Windows argparse was already a superset (`--posture`, `--port`, `--bind`, `--from-scratch`, `--dry-run`, `--install-root`, `--skip-residency`, `--skip-gateway`, `--purge`, `--yes`). Added the one missing flag: `teardown --port` (Linux ufw close). All Linux handlers' `getattr(args, …)` needs satisfied.
-
-## Section 6 — gen-cert hardening (BUG-001-1)
-**Status:** DONE (compile + asserted; e2e at Section 8) — the correct cert contract is now in BOTH Linux paths: `_build_engine_linux` bakes with no-arg gen-cert (personal), and `_provision_runtime_linux` gens at deploy with the server-posture typed-SAN-all-global-IPv4 translation (the b610eaa fix) + a hard `test -s cert.pem && test -s cert.key` rc-check (no false-green). Harness asserts the posture word never reaches gen-cert. Windows trunk already correct (`stage4_brain.sh:99`).
-
-## Section 7 — Migrate, retire, document
-**Status:** DONE (2026-07-23) · **Rename DONE:** `git mv windows_deploy_brain.py deploy_brain.py`; `brain_doctor.py` WindowsBackend import repointed → `deploy_brain` (both compile). Doc/instruction reference sweep (README/INSTALL/DEPLOYMENT/TROUBLESHOOTING/onboard/package/context_pointer) done separately. **DELETION DONE (DEBT-001-3b, NOTE 001-9):** `brain_doctor.py` LinuxBackend rewired to `import deploy_brain as ldb` with the three renamed primitives mapped (`brain_sh`→`_brain_sh`, `_docker_ready`→`_linux_docker_ready`, `require_root`→`require_admin`); `linux_deploy_brain.py` `git rm`'d — no importer remains, the rogue-commit concern (NOTE 001-8) is now moot. Both files `py_compile`-clean; smoke test confirms every `ldb.*` attribute resolves on `deploy_brain`. Only Section-8 live re-verify of `brain_doctor diagnose` (DEBT-001-3a) is left.
-
-## Section 8 — Validation: rebuild dev_brain via unified path
-**Status:** ✅ **PASSED (2026-07-23, supervised)** · Live `deploy_brain.py teardown --purge` + `deploy
---from-scratch` of dev_brain on this Linux host completed all 10 stages → **VERIFY PASSED** (no-token 403 /
-reader-token 200 / reset 403, mode C sealed), and the **rewired** `brain_doctor diagnose` reports
-**HEALTHY** (4/4 containers, stack active/enabled, seam ro, gateway sealed :8443) — matching the
-pre-teardown baseline. First-live surfaced **7 real defects the harnesses could not**: BUG-001-2 (teardown
-false-green), BUG-001-3 (Windows icacls on Linux), BUG-001-4 (rootless container DNS), BUG-001-5
-(brains-group membership), BUG-001-6 (BuildKit `--network=host`), BUG-001-7 (seam config brain-readability)
-— all FIXED + pushed. Neuron IMAGES build; neuron CONTAINERS are not started (DEBT-001-1b, unchanged; the
-4/4 baseline never ran neurons). See NOTE 001-10.
+All eight Sections reached `VERIFIED`/`DONE` and their blocks are in the archive. This live doc now
+holds only the closeout note.
 
 ---
 
 # Objective Notes & Mini-Decisions (serialized)
 
-Append-only, newest at the bottom. One `NOTE 001-K` per decision/update. Grep-able: `grep "NOTE 001-"`.
+NOTE 001-1 … 001-10 are archived in `001_status_archive-unify_deploy_brain.md`. The closeout note follows.
 
-## NOTE 001-1 | 2026-07-21 | Linux engine artifact = docker save + config bundle (CONFIRMED)
-- Status: RESOLVED (user-confirmed 2026-07-21)
-- ADR: none (self-contained; repo keeps no ADRs)
-- Sections: 3, 2
-- Context: Windows exports a WSL rootfs via `wsl --export`; Linux has no distro to export. The user
-  chose "build-an-engine on both", so provisioning live (candidate c) is ruled out.
-- Decision/Update: RECOMMEND candidate (b): `docker save` the pinned image list + a rendered
-  config/cert bundle + an ollama-volume tar as the Linux engine artifact. Rationale: `docker save`/
-  `load` is the portable analog of baking images into the rootfs tar; avoids the UID/overlay-store
-  fragility of tarring the rootless data-root (candidate a). Awaiting user confirm before §2's Linux
-  path is built. Section 3 stays BLOCKED until then.
-
-## NOTE 001-2 | 2026-07-21 | gen-cert hardening can land first
-- Status: OPEN
-- ADR: none (self-contained)
-- Sections: 6
-- Context: BUG-001-1 (the cert false-green) is one small, portable change and is the origin of this
-  whole project. It does not depend on the backend refactor.
-- Decision/Update: Section 6 may land as the first product change (no-arg gen-cert + rc check),
-  independent of the larger unification, so the shared cert contract is correct before §2 wires it in.
-
-## NOTE 001-3 | 2026-07-21 | dev_brain stays down by design until the unified path exists
-- Status: OPEN
-- ADR: none (self-contained)
-- Sections: 8
-- Context: The live dev_brain gateway is crash-looping on the missing cert. Per the user, we are NOT
-  hand-patching `linux_deploy_brain.py:576`; the fix arrives via the unified deployer.
-- Decision/Update: dev_brain remains down until Section 8 rebuilds it through `deploy_brain.py`.
-  Accepted tradeoff — recorded so a fresh agent does not "helpfully" patch the old line.
-
-## NOTE 001-8 | 2026-07-23 | Rogue session hand-patched linux_deploy_brain.py (against instructions)
-- Status: RESOLVED (user-confirmed 2026-07-23)
-- ADR: none (self-contained)
-- Sections: 4, 6, 7
-- Context: On 2026-07-23 a SEPARATE Claude session — **against the user's explicit instruction and NOTE
-  001-3** ("do NOT hand-patch `linux_deploy_brain.py:576`; the fix arrives via the unified deployer") —
-  committed three direct fixes to the being-retired driver: `115fb51` gen-cert takes SAN entries not the
-  posture word (BUG-001-1), `28fb91c` verify chroma on its own surface port, `b610eaa` server cert SAN
-  covers ALL global IPv4s. These were unwanted, but they got dev_brain healthy (user now handles it).
-- Decision/Update: user confirmed "keep consolidating" (2026-07-23). Disposition of the rogue commits:
-  **leave them in place** — deleting `linux_deploy_brain.py` at Section 7 supersedes them, and reverting
-  now risks the live dev_brain that depends on them. Their LOGIC is nonetheless CORRECT behavior, so the
-  Section 4 port folds it into the trunk's Linux path (no-arg/personal + typed-SAN-all-global-IPv4 server
-  cert; chroma verify on its own port). If the user later wants the history cleaned, revert them then.
-  dev_brain is user-handled → no unsupervised live rebuild from me; Section 8 is a supervised run later.
-
-## NOTE 001-9 | 2026-07-23 | DEBT-001-3b done — brain_doctor LinuxBackend rewired, old driver deleted
-- Status: DONE
-- Sections: 7
-- Context: `brain_doctor.py`'s LinuxBackend was the last importer of `linux_deploy_brain.py`.
-- Decision/Update: Rewired the LinuxBackend lazy import to `import deploy_brain as ldb` and mapped the
-  three primitives whose names differ in the trunk — `brain_sh`→`_brain_sh`,
-  `_docker_ready`→`_linux_docker_ready`, `require_root`→`require_admin` — leaving the identically-named
-  ones (`brain_paths`, `user_exists`, `linger_enabled`, `stack_service`, `MOUNT_POINT`) untouched.
-  `_brain_sh` returns the same `(rc, out, err)` shape as the old `brain_sh`, so probe/repair logic is
-  unchanged. `git rm linux_deploy_brain.py`. Verified: both files `py_compile`-clean; a smoke test
-  constructs `LinuxBackend()` and asserts every `ldb.*` attribute resolves on `deploy_brain`. Live
-  re-verify of `brain_doctor diagnose` against a deploy_brain-built brain is DEBT-001-3a (Section 8).
-
-## NOTE 001-10 | 2026-07-23 | Section 8 PASSED — supervised dev_brain teardown+from-scratch redeploy
-- Status: DONE
-- Sections: 8 (also closes DEBT-001-3a)
-- Context: Supervised live run on this native-Linux host: `deploy_brain.py teardown --purge --yes` then
-  `deploy --from-scratch --posture personal --port 8000 --install-root /Horizon.AIOS`, verified with the
-  rewired `brain_doctor.py diagnose`.
-- Decision/Update: All 10 deploy stages completed → VERIFY PASSED (no-token 403 / reader 200 / reset 403,
-  mode C sealed); `brain_doctor` = HEALTHY (4/4 containers, stack active/enabled, seam ro, gateway sealed
-  :8443), matching the pre-teardown baseline. The code was compile+harness-asserted only until now; first
-  live contact surfaced **7 defects the stubbed harnesses structurally could not catch**, each fixed +
-  pushed the same session: BUG-001-2 (teardown `userdel` false-green), BUG-001-3 (Windows `icacls` on the
-  shared staging path), BUG-001-4 (rootless container DNS — user-defined net + embedded resolver, honoring
-  the host's encrypted-DNS control), BUG-001-5 (from-scratch create-brain omitted the `brains` group →
-  traversal denied), BUG-001-6 (neuron `docker build` needs `--network=host`; BuildKit rejects custom
-  nets), BUG-001-7 (stage-8-generated seam config was root:root 0660, unreadable by the brain that runs
-  `apply_brain_truths` — chgrp per-brain + g-w). Neuron IMAGES build but neuron CONTAINERS are still not
-  started (DEBT-001-1b, unchanged). Separate hardening note logged under BUG-001-7 (world-readable seam
-  mountpoint) for the owner. Project 001 is now functionally complete pending the DEBT items.
-
-## NOTE 001-6 | 2026-07-22 | Linux build identity = the real brain account (v1); throwaway build-user is debt
-- Status: RESOLVED (this session)
-- ADR: none (self-contained)
-- Sections: 2, 3
-- Context: Windows `build_engine` runs in a throwaway scratch WSL distro `brain-build-<brain>` as an
-  arbitrary in-distro user, so the build never touches the real brain account and the engine tar is
-  fully portable. On native Linux there is no distro; rootless docker is inherently per-uid (needs a
-  real user, `/run/user/<uid>`, subuid/subgid, linger). A throwaway build USER would mirror Windows but
-  needs its own subuid/linger/rootless-setuptool + teardown — significant fragile machinery.
-- Decision/Update: v1 builds the Linux engine **as the real brain account** (reusing the rootless-docker
-  setup `linux_deploy_brain.py:provision_runtime` already performs). The portable artifact (tars) is
-  still produced for other hosts; on the common same-host case the brain ends up warm, so `deploy` is a
-  fast path. **Divergence from Windows:** Linux `build-engine` has an account side-effect Windows' build
-  does not, and (v1) REQUIRES the brain account to pre-exist — Linux `create-brain` lands in Section 4.
-  **DEBT (DEBT-001-4):** throwaway build-user isolation to match Windows' account-independence.
-
-## NOTE 001-7 | 2026-07-22 | Linux engine artifact layout = system/linux_engine/{images.tar, ollama_models.tar, cert/}
-- Status: RESOLVED (this session)
-- ADR: none (self-contained)
-- Sections: 3, 4
-- Context: Windows engine = one `wsl --export` rootfs tar at `system/wsl_engine/<brain>_engine.tar`. Linux
-  has no rootfs to export; the decided artifact (NOTE 001-1) is `docker save` images + ollama-volume tar
-  + cert/config bundle. Needs a concrete on-disk layout + naming helper analogous to `wsl_runtime_dir`.
-- Decision/Update: `LINUX_RUNTIME_REL = ("system","linux_engine")`, `linux_engine_dir(brain_dir)` =
-  `<brain>/system/linux_engine/`, holding: `images.tar` (`docker save` of the pinned image refs +
-  built neuron images), `ollama_models.tar` (tar of the `<brain>_ollama_models` volume mountpoint), and
-  `cert/{cert.pem,cert.key}` (the no-arg-gen-cert bake, fixing the `linux_deploy_brain.py:576` posture
-  bug at its new home). Build/deploy split per NOTE-synthesis: BUILD = pull images + seed models + build
-  neurons + gen cert + snapshot; DEPLOY = create acct/rootless + `docker load` + volume restore + place
-  cert + render config + `compose up --pull never` (Section 4). Model seeding is NET-NEW (the Linux
-  deploy seeds no ollama models today).
-
-## NOTE 001-5 | 2026-07-21 | Centralize OS-forced concepts behind helpers, not scattered inline `if`s
-- Status: RESOLVED (this session)
-- ADR: none (self-contained)
-- Sections: 1, 2, 4
-- Context: A full touchpoint trace of the 3247-ln trunk showed the OS-forced surface is DENSER than the
-  handoff's five-item summary: the identity switch is one concept realized at ~15 `run_as_brain --wsl`
-  call sites, the WSL engine/snapshot at ~20 `wsl` calls, plus Windows-only SUBSYSTEMS with no clean
-  Linux analog — brain-profile/`.wslconfig`/registry (`ProfileList`, mirrored networking), Win32/ctypes
-  profile-handle release in teardown, PowerShell `Get-LocalUser`, Credential-Manager keyring. Putting an
-  `if _IS_LINUX` inline at each of ~40 sites would make the file a thicket and risk regressing Windows.
-- Decision/Update: realize "only OS-forced steps branch" by CENTRALIZING each OS-forced concept behind
-  ONE helper that branches internally (e.g. one `run_as_brain(...)` emitting `sudo -u <brain> -H …` on
-  Linux vs the `run_as_brain.py --wsl …` staged tool on Windows). Call sites stay unchanged; the Windows
-  path is the untouched `else`. This satisfies NOTE 001-4 (edit the trunk, keep Windows byte-for-byte)
-  while keeping the branch surface small and reviewable. Windows-only subsystems (profile/registry/Win32
-  teardown) get a single early `if _IS_LINUX: return`/skip guard, since Linux has no analog.
-
-## NOTE 001-4 | 2026-07-21 | PIVOT — extend the Windows trunk, do not build a new file (CONFIRMED)
-- Status: RESOLVED (user-confirmed 2026-07-21, this session)
-- ADR: none (self-contained)
-- Sections: ALL (re-frames the whole plan)
-- Context: The prior architecture built a clean-room `deploy_brain.py` with a `PlatformBackend` ABC that
-  re-implemented the deploy lifecycle (Sections 1+6 landed as `a11e713`, Section 2 as origin `13e8467`).
-  The user rejected this end-of-last-session: the working `windows_deploy_brain.py` should be the trunk,
-  Linux parity folded INTO it, not re-implemented alongside it.
-- Decision/Update: (1) Base everything on `windows_deploy_brain.py`; branch inline only at the five
-  OS-forced touchpoints; the Windows path stays byte-for-byte what works. (2) **Rename** the consolidated
-  trunk to `deploy_brain.py` at Section 7 (`git mv`), after validation. (3) **Discard** the rejected
-  clean-room `deploy_brain.py` (its cert rc-guard idea is carried by Section 6). (4) Retire
-  `linux_deploy_brain.py` once its Linux realizations are folded in. Origin was reverted to baseline
-  `30abc35` (force-push) and the stray `13e8467` dropped. All plan docs re-scoped to this framing.
+## NOTE 001-11 | 2026-07-24 | Project close
+- Status: RESOLVED (project CLOSED)
+- **Outcome:** Shipped exactly what was planned and more. `windows_deploy_brain.py` was extended in
+  place with full native-Linux parity and renamed to **`deploy_brain.py`** — one cross-platform
+  deployer (Windows/WSL2 + native Linux rootless-docker), Windows path proven byte-for-byte untouched.
+  Sections 1–7 landed; Section 8 was a **supervised live teardown + from-scratch redeploy of dev_brain**
+  that PASSED end-to-end (VERIFY PASSED, `brain_doctor diagnose` = HEALTHY) and, being first-live,
+  surfaced **8 real defects the compile+stubbed-harness checks structurally could not catch**
+  (BUG-001-1…8) — all FIXED, live-validated, and pushed. Neuron bring-up on Linux (DEBT-001-1b) and the
+  real-client-IP requirement (DEBT-001-2) were also implemented and live-validated, so the final
+  dev_brain runs the base RAG stack **and** its neuron bundle, with the config-exposure seam scoped to
+  root + the owning brain and rootless networking that provably preserves the client source IP.
+- **Dropped/deferred:** `DEBT-001-4` (throwaway build-user isolation) — **CLOSED won't-do**: the
+  real-account build already yields a correct, account-independent engine artifact; the isolation is
+  optional purity Linux doesn't need. `DEBT-001-5` (fail2ban `ignoreip` hard-codes the slirp4netns
+  `10.0.2.0/24` range vs pasta) — **DEFERRED** with destination: revisit at the first server-posture
+  Linux brain (LOW; inert under pasta/personal). Nothing else outstanding; every BUG FIXED and every
+  DEBT closed or deferred-with-destination.
+- **Final state:** `origin/main` — the deployer work through the debt sweep and this close. Key commits:
+  `3d6b505` (DEBT-001-3b + driver deletion), `8dcf322`/`f6ba4a3`/`fd0bb5a`/`f03448d`/`8c2e8c6`/`d5a5769`
+  (BUG-001-2…7), `ad3026c` (BUG-001-8 seam hardening), `ee04b8c` (DEBT-001-1b neuron bring-up),
+  `a9a0b54` (DEBT-001-2 real-IP assertion + DEBT-001-4/5), plus this close.
+- **Successors:** none scaffolded. `DEBT-001-5` is the only carried thread; pick it up ad hoc when a
+  server-posture Linux brain is first deployed (no dependent project waits on it).

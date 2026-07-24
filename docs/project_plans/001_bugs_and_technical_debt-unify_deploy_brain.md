@@ -4,7 +4,7 @@ title: "Project 001 — Unify the brain deployer (Bugs & Technical Debt)"
 description: Running list of open bugs and technical debt for Project 001; every item cleared or deferred-with-reason before close.
 tags: [project-plan, bugs, technical-debt, deployer]
 timestamp: 2026-07-21
-status: draft
+status: closed
 ---
 
 # Project 001 — Bugs & Technical Debt
@@ -234,8 +234,9 @@ project closes. Ids are stable: `BUG-001-K` / `DEBT-001-K`.
 3. **Impact:** LOW — under personal posture it is moot (loopback only). Under server posture the stale
    `10.0.2.0/24` is merely an over-broad exemption of an unused range; loopback + `172.16/12` still cover
    the real internal cases, so it neither blocks bans of real attackers nor exempts them.
-4. **Status:** OPEN → revisit when a server-posture Linux brain is first deployed (verify real external
-   IPs are logged + bannable under pasta, and reconcile the exempt range).
+4. **Status:** DEFERRED (2026-07-24) → **destination:** revisit when a server-posture Linux brain is
+   first deployed — verify real external IPs are logged + bannable under pasta, and reconcile the exempt
+   range. Consciously carried past Project 001 close (LOW, inert under pasta/personal).
 
 ## DEBT-001-3 — brain_doctor probes must track the unified deployer's outputs
 1. **Decision/context:** `brain_doctor.py` already dispatches per-OS, but its residency/seam/stack

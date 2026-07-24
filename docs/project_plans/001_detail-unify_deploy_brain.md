@@ -4,7 +4,7 @@ title: "Project 001 — Unify the brain deployer (Plan Detail)"
 description: Fold Linux parity INTO the working windows_deploy_brain.py, branching only at OS-forced steps, then rename that consolidated trunk to deploy_brain.py; retire linux_deploy_brain.py.
 tags: [project-plan, deployer, cross-platform, build-engine]
 timestamp: 2026-07-21
-status: draft
+status: closed
 ---
 
 # Project 001 — Unify the brain deployer

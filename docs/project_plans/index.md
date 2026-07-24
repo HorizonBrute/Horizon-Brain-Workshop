@@ -17,7 +17,7 @@ a topic slug.
 
 <!-- Newest projects at the top. Mark closed projects `— CLOSED YYYY-MM-DD (outcome)`. -->
 
-* 001 — Unify the brain deployer — planning; one deploy_brain.py on a shared build-an-engine lifecycle (Section 3 blocked on the Linux-engine-artifact decision)
+* 001 — Unify the brain deployer — **CLOSED 2026-07-24** (one cross-platform `deploy_brain.py`; dev_brain rebuilt from scratch + HEALTHY; 8 first-live bugs fixed; all debt closed bar DEBT-001-5 deferred)
   * [Detail (plan of record)](001_detail-unify_deploy_brain.md)
   * [Status (live)](001_status-unify_deploy_brain.md)
   * [Status Archive](001_status_archive-unify_deploy_brain.md)

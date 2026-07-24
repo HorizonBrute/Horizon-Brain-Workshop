@@ -4,10 +4,16 @@ title: "Project 001 — Unify the brain deployer (Current Orientation)"
 description: The read-instead-of-a-handoff cold-start orientation for Project 001.
 tags: [project-plan, orientation, deployer]
 timestamp: 2026-07-21
-status: draft
+status: closed
 ---
 
 # Project 001 — Current Orientation
+
+> **STATUS: CLOSED 2026-07-24** — one cross-platform `deploy_brain.py` (Windows/WSL2 + native Linux);
+> dev_brain rebuilt from scratch and HEALTHY (base stack + neurons). Sections 1–8 VERIFIED; 8 first-live
+> defects fixed (BUG-001-1…8); all DEBT closed except DEBT-001-5 (deferred, server-posture fail2ban
+> range). See the closeout **NOTE 001-11** in `001_status-unify_deploy_brain.md`. The text below is
+> historical reference.
 
 > Read this instead of a handoff to resume Project 001 cold. Short by design.
 
